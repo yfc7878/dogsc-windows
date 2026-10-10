@@ -485,7 +485,16 @@ async function start() {
       media: state.payload.media,
       exportAudio: true,
     });
-    if (!result?.ok) throw new Error(result?.message || result?.reason || "failed");
+    if (!result?.ok) {
+      /* Known reasons get a sentence the user can act on; anything else keeps
+         the technical message so a real bug is still debuggable. */
+      const known = {
+        "no-frames": t("编码器没有输出任何画面，请重试或更换分辨率／帧率"),
+        busy: t("已有导出任务在进行中"),
+        "no-job": t("导出任务已失效，请重新开始"),
+      }[result?.reason];
+      throw new Error(known || result?.message || result?.reason || "failed");
+    }
     finishSuccess(result);
   } catch (error) {
     if (state.cancelled) return;
@@ -517,82 +526,77 @@ async function pickCodec(size, fps) {
   return null;
 }
 
-async function runFrameLoop({ size, duration, codec }) {
+/**
+ * Runs one encode pass and reports what it produced.
+ *
+ * The byte count matters: an encoder that is configured successfully can still
+ * emit nothing (a flaky hardware encoder, or a GPU under contention). That used
+ * to be invisible here and only surfaced much later as an ffmpeg failure on an
+ * empty bitstream, so the pass measures itself instead.
+ */
+async function encodeBitstreamPass({ size, duration, codec, hardwareAcceleration, sources }) {
   const canvas = document.createElement("canvas");
   canvas.width = size.width;
   canvas.height = size.height;
   const ctx = canvas.getContext("2d", { alpha: false });
 
   const totalFrames = Math.max(1, Math.round(duration * state.fps));
-  let frameIndex = 0;
-  let encoder = null;
-  let pending = [];
+  const pending = [];
+  let bytes = 0;
+  let frames = 0;
+  let encoderError = null;
 
-  if (codec) {
-    encoder = new VideoEncoder({
-      output: (chunk) => {
-        const buffer = new ArrayBuffer(chunk.byteLength);
-        chunk.copyTo(buffer);
-        pending.push(
-          api.exporter.chunk({
-            data: buffer,
-            timestamp: chunk.timestamp,
-            keyframe: chunk.type === "key",
-          })
-        );
-      },
-      error: (error) => console.error("[export] encoder error", error),
-    });
-    encoder.configure({
-      codec: codec.codec,
-      width: size.width,
-      height: size.height,
-      bitrate: codec.bitrate,
-      framerate: state.fps,
-      latencyMode: "quality",
-      /* ffmpeg's `h264` demuxer expects Annex B start codes, not the AVCC
-         length-prefixed framing Chromium produces by default. */
-      avc: { format: "annexb" },
-    });
-    state.encoder = encoder;
-  }
+  const encoder = new VideoEncoder({
+    output: (chunk) => {
+      bytes += chunk.byteLength;
+      const buffer = new ArrayBuffer(chunk.byteLength);
+      chunk.copyTo(buffer);
+      pending.push(
+        api.exporter.chunk({
+          data: buffer,
+          timestamp: chunk.timestamp,
+          keyframe: chunk.type === "key",
+        })
+      );
+    },
+    error: (error) => {
+      encoderError = String(error?.message || error);
+      console.error("[export] encoder error", error);
+    },
+  });
+  encoder.configure({
+    codec: codec.codec,
+    width: size.width,
+    height: size.height,
+    bitrate: codec.bitrate,
+    framerate: state.fps,
+    latencyMode: "quality",
+    hardwareAcceleration,
+    /* ffmpeg's `h264` demuxer expects Annex B start codes, not the AVCC
+       length-prefixed framing Chromium produces by default. */
+    avc: { format: "annexb" },
+  });
+  state.encoder = encoder;
 
-  const sources = {
-    screen: state.media.screen,
-    camera: state.media.camera,
-    backgroundImage: null,
-    backgroundVideo: null,
-    stickers: new Map(),
-  };
-
-  for (frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
+  for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
     if (state.cancelled) break;
     const time = frameIndex / state.fps;
 
     await seekAll(time);
     renderFrame(ctx, state.document, time, { width: size.width, height: size.height, sources });
 
-    if (encoder) {
-      const frame = new VideoFrame(canvas, {
-        timestamp: Math.round((frameIndex / state.fps) * 1e6),
-        duration: Math.round(1e6 / state.fps),
-      });
-      encoder.encode(frame, { keyFrame: frameIndex % (state.fps * 2) === 0 });
-      frame.close();
-      /* Keep the encoder queue shallow so memory stays bounded. */
-      while (encoder.encodeQueueSize > 12 && !state.cancelled) {
-        await new Promise((resolve) => setTimeout(resolve, 4));
-        await Promise.all(pending.splice(0));
-      }
-    } else {
-      const blob = await new Promise((resolve) =>
-        canvas.toBlob(resolve, "image/jpeg", 0.94)
-      );
-      const buffer = await blob.arrayBuffer();
-      await api.exporter.chunk({
-        data: buffer,
-        name: `frame-${String(frameIndex + 1).padStart(6, "0")}.jpg`,
-      });
+    const frame = new VideoFrame(canvas, {
+      timestamp: Math.round((frameIndex / state.fps) * 1e6),
+      duration: Math.round(1e6 / state.fps),
+    });
+    encoder.encode(frame, { keyFrame: frameIndex % (state.fps * 2) === 0 });
+    frame.close();
+    frames += 1;
+
+    /* Keep the encoder queue shallow so memory stays bounded. */
+    while (encoder.encodeQueueSize > 12 && !state.cancelled) {
+      await new Promise((resolve) => setTimeout(resolve, 4));
+      await Promise.all(pending.splice(0));
     }
 
     if (frameIndex % 5 === 0 || frameIndex === totalFrames - 1) {
@@ -601,14 +605,91 @@ async function runFrameLoop({ size, duration, codec }) {
   }
 
   await Promise.all(pending.splice(0));
-
-  if (encoder) {
-    if (!state.cancelled) {
+  if (!state.cancelled) {
+    try {
       await encoder.flush();
-      await Promise.all(pending.splice(0));
+    } catch (error) {
+      encoderError = encoderError || String(error?.message || error);
     }
+    await Promise.all(pending.splice(0));
+  }
+  try {
     encoder.close();
-    state.encoder = null;
+  } catch {
+    /* already closed */
+  }
+  state.encoder = null;
+  return { frames, bytes, error: encoderError };
+}
+
+/** JPEG image sequence: the fallback when no H.264 encoder exists at all. */
+async function encodeJpegFrames({ size, duration, sources }) {
+  const canvas = document.createElement("canvas");
+  canvas.width = size.width;
+  canvas.height = size.height;
+  const ctx = canvas.getContext("2d", { alpha: false });
+
+  const totalFrames = Math.max(1, Math.round(duration * state.fps));
+  for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
+    if (state.cancelled) break;
+    const time = frameIndex / state.fps;
+    await seekAll(time);
+    renderFrame(ctx, state.document, time, { width: size.width, height: size.height, sources });
+
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.94));
+    const buffer = await blob.arrayBuffer();
+    await api.exporter.chunk({
+      data: buffer,
+      name: `frame-${String(frameIndex + 1).padStart(6, "0")}.jpg`,
+    });
+
+    if (frameIndex % 5 === 0 || frameIndex === totalFrames - 1) {
+      setProgress("encoding", (frameIndex + 1) / totalFrames);
+    }
+  }
+}
+
+async function runFrameLoop({ size, duration, codec }) {
+  const sources = {
+    screen: state.media.screen,
+    camera: state.media.camera,
+    backgroundImage: null,
+    backgroundVideo: null,
+    stickers: new Map(),
+  };
+
+  if (!codec) {
+    await encodeJpegFrames({ size, duration, sources });
+    return;
+  }
+
+  let pass = await encodeBitstreamPass({
+    size,
+    duration,
+    codec,
+    hardwareAcceleration: "no-preference",
+    sources,
+  });
+
+  if (!state.cancelled && pass.frames > 0 && pass.bytes === 0) {
+    /* A hardware encoder can accept frames and emit nothing. Retrying on the
+       software encoder turns that into a finished export instead of an empty
+       bitstream and an incomprehensible ffmpeg failure. */
+    console.warn("[export] the encoder produced no data; retrying with the software encoder");
+    setProgress("encoding", 0);
+    pass = await encodeBitstreamPass({
+      size,
+      duration,
+      codec,
+      hardwareAcceleration: "prefer-software",
+      sources,
+    });
+  }
+
+  if (!state.cancelled && pass.bytes === 0) {
+    throw new Error(
+      pass.error ? `${t("编码器没有输出画面")}（${pass.error}）` : t("编码器没有输出画面")
+    );
   }
 }
 
@@ -686,20 +767,22 @@ boot();
  * a known-good export and runs it, so the render → encode → mux pipeline can
  * be verified without driving the UI by hand.
  */
-window.__dogscExportTest = async (target, seconds = 4) => {
+window.__dogscExportTest = async (target, seconds = 4, options = {}) => {
   const folder = target.replace(/[\\/][^\\/]*$/, "");
   const name = target.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
   state.folder = folder;
-  state.resolution = "1080p";
-  state.fps = 30;
-  state.content = "video";
+  /* The panel defaults are the ones a user actually exports with (60 fps), so
+     the check has to be able to mirror them instead of only its own preset. */
+  state.resolution = options.resolution || "1080p";
+  state.fps = options.fps || 30;
+  state.content = options.content || "video";
   document.getElementById("folder-path").textContent = folder;
   document.getElementById("file-name").value = name;
   /* Keep the check short: only the first few seconds are exported. */
   const clips = state.document.timeline.primaryClips;
   clips.forEach((clip, index) => {
-    if (index === 0) clip.sourceDuration = Math.min(clip.sourceDuration, seconds);
-    else clip.sourceDuration = 0;
+    const budget = index === 0 ? seconds : 0;
+    clip.sourceDuration = Math.min(clip.sourceDuration, budget);
   });
   state.document.timeline.primaryClips = clips.filter((clip) => clip.sourceDuration > 0.05);
   buildChoices();

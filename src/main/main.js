@@ -887,6 +887,9 @@ async function runSmokeTest(outputDir, projectPath) {
       if (!entry?.path) continue;
       media[role] = { relative: entry.path, absolute: path.join(projectPath, entry.path) };
     }
+    /* The panel seeds its destination folder from this preference, so the
+       click-through reproduction needs it pointing at the output directory. */
+    if (process.env.DOGSC_EXPORT_CLICK) prefs.set("exportLocation", outputDir);
     const exportPanel = windows.createExportPanel({
       packagePath: projectPath,
       document: document_,
@@ -1332,9 +1335,19 @@ async function runExportTest(win, outputDir) {
   if (!win || win.isDestroyed()) return;
   const target = path.join(outputDir, "export-check.mp4");
   await fsp.rm(target, { force: true });
-  await win.webContents.executeJavaScript(
-    `window.__dogscExportTest && window.__dogscExportTest(${JSON.stringify(target)})`
-  );
+  /* The check is short by default; a longer one exercises the chunked write
+     path hard enough to surface ordering/corruption problems. */
+  const seconds = Number(process.env.DOGSC_EXPORT_SECONDS || 4) || 4;
+  const options = process.env.DOGSC_EXPORT_OPTIONS || "{}";
+  if (process.env.DOGSC_EXPORT_CLICK) {
+    /* Reproduce the user's path exactly: whatever the panel is set to, with the
+       full timeline and the editor's range. */
+    await win.webContents.executeJavaScript(`document.getElementById("btn-start").click(), true`);
+  } else {
+    await win.webContents.executeJavaScript(
+      `window.__dogscExportTest && window.__dogscExportTest(${JSON.stringify(target)}, ${seconds}, ${options})`
+    );
+  }
 
   const deadline = Date.now() + 420000;
   let status = "timeout";
@@ -2100,6 +2113,10 @@ async function beginExport(payload) {
     bitstreamPath: path.join(dir, `video-${stamp}.bin`),
     framesDir: path.join(dir, `frames-${stamp}`),
     handle: null,
+    /* Explicit write position, so concurrent chunk writes cannot collide. */
+    offset: 0,
+    chunkCount: 0,
+    chunkBytes: 0,
     controller: new AbortController(),
     cancelled: false,
     frameIndex: 0,
@@ -2120,7 +2137,20 @@ async function writeExportChunk(payload) {
     const name = `frame-${String(exportJob.frameIndex).padStart(6, "0")}.jpg`;
     await fsp.writeFile(path.join(exportJob.framesDir, name), buffer);
   } else if (exportJob.handle) {
-    await exportJob.handle.write(buffer);
+    /* The write offset is taken synchronously and passed explicitly. Writing
+       through the handle's shared cursor (`handle.write(buffer)`) lets two
+       chunks that are in flight at the same time overwrite each other, which
+       corrupts the H.264 stream — measured: a 400-chunk write came out
+       byte-different, and ffmpeg then failed with "Could not find codec
+       parameters ... unspecified size". */
+    const offset = exportJob.offset;
+    exportJob.offset += buffer.length;
+    exportJob.chunkCount += 1;
+    exportJob.chunkBytes += buffer.length;
+    await exportJob.handle.write(buffer, 0, buffer.length, offset);
+  } else {
+    console.error("[export] chunk dropped: the job has no bitstream handle");
+    return { ok: false, reason: "no-handle" };
   }
   return { ok: true };
 }
@@ -2173,6 +2203,23 @@ async function finishExport(payload) {
         onProgress,
       });
     } else {
+      /* An empty bitstream means the encoder never produced a frame. Handing
+         that to ffmpeg produces a wall of "Could not find codec parameters …
+         unspecified size" with no hint of the real cause, so it is reported
+         here instead. */
+      const size = await fsp.stat(job.bitstreamPath).then((stat) => stat.size, () => 0);
+      console.log(
+        `[export] bitstream ${path.basename(job.bitstreamPath)} · ${size} bytes · ` +
+          `${job.chunkCount} chunks received`
+      );
+      if (size === 0) {
+        exportJob = null;
+        return {
+          ok: false,
+          reason: "no-frames",
+          message: "the encoder produced no frames",
+        };
+      }
       await exporter.wrapVideo({
         codec: job.codec,
         bitstreamPath: job.bitstreamPath,
