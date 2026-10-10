@@ -59,6 +59,13 @@ const state = { tool: "frame", frameTab: "background", backgroundTab: "pattern" 
 /* Rail                                                                      */
 /* ------------------------------------------------------------------------- */
 
+function applyRailAvailability(button, tool) {
+  const available = isToolAvailable(tool.id);
+  button.disabled = !available;
+  button.style.opacity = available ? "" : "0.38";
+  return available;
+}
+
 export function mountRail(root) {
   root.innerHTML = "";
   for (const tool of TOOLS) {
@@ -67,12 +74,12 @@ export function mountRail(root) {
     button.className = "rail-button";
     button.dataset.tool = tool.id;
     button.innerHTML = `${icon(tool.icon, 19)}<span>${t(tool.label)}</span>`;
-    const available = isToolAvailable(tool.id);
-    if (!available) {
-      button.disabled = true;
-      button.style.opacity = "0.38";
-    }
-    attachTooltip(button, available ? t(tool.label) : unavailableReason(tool.id));
+    applyRailAvailability(button, tool);
+    /* Resolved when the tooltip is shown, not now: the rail is mounted before
+       the project finishes loading, so the reason has to be able to change. */
+    attachTooltip(button, () =>
+      isToolAvailable(tool.id) ? t(tool.label) : unavailableReason(tool.id)
+    );
     button.addEventListener("click", () => {
       state.tool = tool.id;
       paintRail();
@@ -81,6 +88,20 @@ export function mountRail(root) {
     root.appendChild(button);
   }
   paintRail();
+}
+
+/**
+ * Re-evaluates which tools the loaded project makes available.
+ *
+ * The rail is built before `store.load()` resolves, so camera, audio and
+ * cursor stayed greyed out — tooltip and all — however complete the project
+ * actually was. Called once the document arrives.
+ */
+export function refreshRailAvailability() {
+  for (const button of document.querySelectorAll(".rail-button")) {
+    const tool = TOOLS.find((entry) => entry.id === button.dataset.tool);
+    if (tool) applyRailAvailability(button, tool);
+  }
 }
 
 function paintRail() {

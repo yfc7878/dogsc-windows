@@ -90,6 +90,20 @@ export function resolveCanvasSize(document, resolution, sourceSize) {
 }
 
 /**
+ * Scale for the authored style measurements.
+ *
+ * The original measures padding, corner radii, border widths and blurs against
+ * a 1080-pixel short edge (`CompositionSceneEvaluator.canonicalStyleScale`), so
+ * a padding of 70 means the same *proportion* of the frame in the editor
+ * preview as it does in a 4K export. Using the raw numbers produced a
+ * different composition at every render size — the export looked more zoomed
+ * in than the preview.
+ */
+export function canvasStyleScale(width, height) {
+  return Math.max(Math.min(width, height), 1) / 1080;
+}
+
+/**
  * Computes the on-canvas rectangle of the recorded screen at `time`, including
  * the zoom animation and any Screen 3D motion clip.
  */
@@ -97,13 +111,20 @@ export function layoutScreen(document, time, width, height) {
   const canvas = document.canvas;
   const crop = canvas.crop;
   const sourceSize = document.__sourceSize || { width: 1920, height: 1080 };
+  const styleScale = canvasStyleScale(width, height);
 
   const croppedWidth = sourceSize.width * crop.width;
   const croppedHeight = sourceSize.height * crop.height;
   const contentRatio = croppedWidth / Math.max(croppedHeight, 1);
 
-  const availableWidth = width - canvas.padding * 2;
-  const availableHeight = height - canvas.padding * 2;
+  /* Padding is clamped against the canvas, exactly as the original does, so a
+     large authored value can never invert the available box. */
+  const padding = Math.min(
+    Math.max(canvas.padding * styleScale, 0),
+    Math.min(width, height) * 0.42
+  );
+  const availableWidth = Math.max(width - padding * 2, 2);
+  const availableHeight = Math.max(height - padding * 2, 2);
   let baseWidth = availableWidth;
   let baseHeight = baseWidth / contentRatio;
   if (baseHeight > availableHeight) {
@@ -122,7 +143,9 @@ export function layoutScreen(document, time, width, height) {
   let tiltY = 0;
   let perspective = 0.5;
   let opacity = 1;
-  let cornerRadius = canvas.cornerRadius;
+  /* Authored against a 1080 short edge, and follows the card as it grows —
+     the original scales the radius by the style scale *and* the motion scale. */
+  let cornerRadius = canvas.cornerRadius * styleScale;
 
   /* Zoom animation: magnification around an authored focus point. */
   const zoom = clipAtTime(document.timeline.zoomClips, time);
@@ -152,7 +175,7 @@ export function layoutScreen(document, time, width, height) {
     tiltY = target.tiltY * progress;
     perspective = target.perspective;
     opacity = 1 + (target.opacity - 1) * progress;
-    cornerRadius = cornerRadius + (target.cornerRadius - cornerRadius) * progress;
+    cornerRadius = cornerRadius + (target.cornerRadius * styleScale - cornerRadius) * progress;
   }
 
   /* Opening sequence: the screen slides and fades in. */
@@ -181,6 +204,9 @@ export function layoutScreen(document, time, width, height) {
     tiltY,
     perspective,
     opacity,
+    /* Carried so the border, shadow and mockup chrome measure themselves
+       against the same authored scale as the card. */
+    styleScale,
     cornerRadius,
     zoomScale: zoom ? 1 + (zoom.scale - 1) * (evaluateClip(zoom, time)?.progress ?? 1) : 1,
   };
@@ -838,7 +864,9 @@ function drawScreenShadow(ctx, rect, strength) {
 }
 
 function drawScreenBorder(ctx, rect, document) {
-  const width = document.canvas.borderWidth;
+  /* Clamped and scaled like the original: a border is a visual measurement, so
+     it stays the same relative thickness at every output size. */
+  const width = Math.min(Math.max(document.canvas.borderWidth, 0), 60) * (rect.styleScale || 1);
   if (!width) return;
   ctx.save();
   ctx.strokeStyle = hexToRgba(document.canvas.borderColor || "#FFFFFF", 1);
@@ -887,28 +915,75 @@ function drawMockup(ctx, document, rect, time) {
         : 0;
 
   const outerRadius =
-    document.canvas.screenFrameOuterCornerRadius ??
-    (document.canvas.cornerRadius + 10 * scale);
+    (document.canvas.screenFrameOuterCornerRadius ??
+      (document.canvas.cornerRadius + 10 * scale)) * (rect.styleScale || 1);
 
   const outerX = rect.x;
   const outerY = rect.y - toolbarHeight;
   const outerWidth = rect.width;
   const outerHeight = rect.height + toolbarHeight;
 
+  /* Under Screen 3D the chrome has to travel with the card. Drawn flat it
+     produced a window frame with a tilted picture hanging out of it — the
+     original composes chrome and picture into one card and projects it once. */
+  const projection = hasScreen3D(rect)
+    ? {
+        rotationX: rect.tiltX,
+        rotationY: rect.tiltY,
+        rotationZ: rect.rotation,
+        perspective: rect.perspective,
+        anchor: { x: rect.centerX, y: rect.centerY },
+      }
+    : null;
+  const outerShape = { width: outerWidth, height: outerHeight };
+  const outerQuad = projection
+    ? projectedScreenQuad(
+        { x: outerX, y: outerY, width: outerWidth, height: outerHeight },
+        projection
+      )
+    : null;
+
+  const shellPath = () => {
+    if (outerQuad) traceProjectedPath(ctx, outerQuad, outerShape, outerRadius);
+    else roundRect(ctx, outerX, outerY, outerWidth, outerHeight, outerRadius);
+  };
+
   ctx.save();
   ctx.shadowColor = `rgba(0,0,0,${0.34 * (document.canvas.shadowStrength || 0.28) + 0.08})`;
   ctx.shadowBlur = Math.max(10, rect.width * 0.05);
   ctx.shadowOffsetY = Math.max(3, rect.height * 0.018);
   ctx.fillStyle = chromeColor;
-  roundRect(ctx, outerX, outerY, outerWidth, outerHeight, outerRadius);
+  shellPath();
   ctx.fill();
   ctx.restore();
 
   if (toolbarHeight > 0) {
     ctx.save();
     ctx.fillStyle = chromeColor;
-    roundRect(ctx, outerX, outerY, outerWidth, outerHeight, outerRadius);
+    shellPath();
     ctx.clip();
+
+    /* The toolbar contents are authored in the unprojected strip; under 3D an
+       affine map onto the strip's own quad keeps the dots, the title and the
+       separator in place without a second perspective pass. */
+    if (projection) {
+      const toolbarQuad = projectedScreenQuad(
+        { x: outerX, y: outerY, width: outerWidth, height: toolbarHeight },
+        projection
+      );
+      const ax = (toolbarQuad.topRight.x - toolbarQuad.topLeft.x) / Math.max(outerWidth, 0.001);
+      const ay = (toolbarQuad.topRight.y - toolbarQuad.topLeft.y) / Math.max(outerWidth, 0.001);
+      const bx = (toolbarQuad.bottomLeft.x - toolbarQuad.topLeft.x) / Math.max(toolbarHeight, 0.001);
+      const by = (toolbarQuad.bottomLeft.y - toolbarQuad.topLeft.y) / Math.max(toolbarHeight, 0.001);
+      ctx.transform(
+        ax,
+        ay,
+        bx,
+        by,
+        toolbarQuad.topLeft.x - ax * outerX - bx * outerY,
+        toolbarQuad.topLeft.y - ay * outerX - by * outerY
+      );
+    }
 
     const dotRadius = Math.max(2.6, toolbarHeight * 0.13);
     const dotY = outerY + toolbarHeight / 2;

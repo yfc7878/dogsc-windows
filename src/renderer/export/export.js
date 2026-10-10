@@ -62,6 +62,11 @@ const state = {
   payload: null,
   document: null,
   media: { screen: null, camera: null },
+  /* The composite needs the same background and sticker media the editor uses,
+     otherwise the exported picture silently falls back to the pattern. */
+  backgroundImage: null,
+  backgroundVideo: null,
+  stickers: new Map(),
   content: "video",
   resolution: "1080p",
   fps: 60,
@@ -183,6 +188,8 @@ async function init(payload) {
   document.getElementById("folder-path").textContent = state.folder || t("尚未选择");
 
   await loadMedia();
+  await loadBackground();
+  await loadStickers();
   buildChoices();
   updateSpecs();
   await renderPreview();
@@ -215,6 +222,85 @@ async function loadMedia() {
       };
     }
   }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Composite media                                                           */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * The background picture/video and the stickers, loaded exactly as the editor
+ * loads them.
+ *
+ * Without this the export window only had the recorded screen and camera, so a
+ * project with a wallpaper background or stickers exported with the fallback
+ * pattern instead — the picture did not match the preview.
+ */
+function loadImage(url) {
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => resolve(image);
+    image.onerror = () => resolve(null);
+    image.src = url;
+  });
+}
+
+async function loadBackground() {
+  state.backgroundImage = null;
+  state.backgroundVideo = null;
+  const source = state.document?.canvas?.backgroundSource;
+  if (!source) return;
+  const packagePath = state.payload.packagePath;
+
+  if (source.kind === "projectImage" && source.relativePath) {
+    const url = await api.project.mediaUrl({ packagePath, relative: source.relativePath });
+    if (url) state.backgroundImage = await loadImage(url);
+  } else if (source.kind === "systemImage" && source.absolutePath) {
+    state.backgroundImage = await loadImage(
+      `dogsc-media://local/${encodeURIComponent(source.absolutePath)}`
+    );
+  } else if (source.kind === "projectVideo" && source.relativePath) {
+    const url = await api.project.mediaUrl({ packagePath, relative: source.relativePath });
+    if (!url) return;
+    const video = document.createElement("video");
+    video.src = url;
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    video.crossOrigin = "anonymous";
+    await new Promise((resolve) => {
+      video.addEventListener("loadeddata", resolve, { once: true });
+      video.addEventListener("error", resolve, { once: true });
+      setTimeout(resolve, 8000);
+    });
+    state.backgroundVideo = video;
+  }
+}
+
+async function loadStickers() {
+  state.stickers = new Map();
+  for (const clip of state.document?.timeline?.stickerClips || []) {
+    if (!clip.source || state.stickers.has(clip.source)) continue;
+    const url = await api.project.mediaUrl({
+      packagePath: state.payload.packagePath,
+      relative: clip.source,
+    });
+    if (!url) continue;
+    const image = await loadImage(url);
+    if (image) state.stickers.set(clip.source, image);
+  }
+}
+
+/** The drawable set handed to the compositor, matching the editor's `sources`. */
+function compositeSources() {
+  return {
+    screen: state.media.screen,
+    camera: state.media.camera,
+    backgroundImage: state.backgroundImage,
+    backgroundVideo: state.backgroundVideo,
+    stickers: state.stickers,
+  };
 }
 
 /* ------------------------------------------------------------------------- */
@@ -378,23 +464,19 @@ async function renderPreview() {
        resolution, so the frame has to be scaled to match or it lands in the
        top-left corner at 1/dpr size. */
     scale: dpr,
-    sources: {
-      screen: state.media.screen,
-      camera: state.media.camera,
-      backgroundImage: null,
-      backgroundVideo: null,
-      stickers: new Map(),
-    },
+    sources: compositeSources(),
   });
 }
 
 async function seekAll(time) {
   const sourceTime = sourceTimeAt(state.document, time);
-  await Promise.all(
-    Object.values(state.media)
-      .filter(Boolean)
-      .map((video) => seek(video, sourceTime))
-  );
+  const videos = Object.values(state.media).filter(Boolean);
+  /* A background video is part of the picture and has to follow the playhead
+     just like the recorded media. */
+  if (state.backgroundVideo && state.backgroundVideo.readyState >= 1) {
+    videos.push(state.backgroundVideo);
+  }
+  await Promise.all(videos.map((video) => seek(video, sourceTime)));
 }
 
 function seek(video, time) {
@@ -499,6 +581,10 @@ async function start() {
   } catch (error) {
     if (state.cancelled) return;
     console.error("[export] failed", error);
+    /* Release the job in the main process: without this an export that died
+       before `finish` left it registered and every later attempt reported
+       "busy". */
+    api.exporter.cancel().catch(() => {});
     setProgress("failed", 0);
     toast(t("导出失败") + `：${error.message}`, { icon: "info", duration: 5000 });
     state.exporting = false;
@@ -650,13 +736,7 @@ async function encodeJpegFrames({ size, duration, sources }) {
 }
 
 async function runFrameLoop({ size, duration, codec }) {
-  const sources = {
-    screen: state.media.screen,
-    camera: state.media.camera,
-    backgroundImage: null,
-    backgroundVideo: null,
-    stickers: new Map(),
-  };
+  const sources = compositeSources();
 
   if (!codec) {
     await encodeJpegFrames({ size, duration, sources });
@@ -755,6 +835,12 @@ function updateProgress(payload) {
   if (!state.exporting) return;
   setProgress(payload.stage, payload.progress || 0);
 }
+
+/* Closing the sheet abandons the export, so the job must not stay registered
+   in the main process. */
+window.addEventListener("pagehide", () => {
+  if (state.exporting) api.exporter.cancel().catch(() => {});
+});
 
 boot();
 

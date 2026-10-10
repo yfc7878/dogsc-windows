@@ -32,7 +32,7 @@ import {
   syncMedia,
   togglePlay,
 } from "./timeline.js";
-import { mountInspector, mountRail, paintInspector } from "./inspector.js";
+import { mountInspector, mountRail, paintInspector, refreshRailAvailability } from "./inspector.js";
 
 const api = window.dogsc;
 
@@ -139,6 +139,9 @@ async function openProject(packagePath) {
   document.getElementById("empty-state").hidden = true;
   document.getElementById("project-name").textContent = store.document.name;
   document.title = `${store.document.name} — DogSC`;
+  /* The rail is built before the document exists, so which tools the project
+     makes available is only known now. */
+  refreshRailAvailability();
   paintInspector();
   paintTimeline();
   resizePreview();

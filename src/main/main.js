@@ -26,6 +26,7 @@ const {
   globalShortcut,
   Menu,
   BrowserWindow,
+  webContents,
   protocol,
   net,
   systemPreferences,
@@ -318,11 +319,14 @@ function registerIpc() {
   ipcMain.handle("prefs:all", () => prefs.get());
   ipcMain.handle("prefs:get", (_e, key) => prefs.get(key));
   ipcMain.handle("prefs:set", (_e, { key, value }) => {
-    const result = prefs.set(key, value);
+    prefs.set(key, value);
     if (key === "appearance") applyTheme();
     broadcast("app:prefs", prefs.get());
     broadcast("app:theme", currentTheme());
-    return result;
+    /* The whole store, not just the written value: callers keep their copy of
+       the preferences in one variable, and handing back a bare string left
+       every selection in the settings window unset. */
+    return prefs.get();
   });
   ipcMain.handle("prefs:patch", (_e, partial) => {
     const result = prefs.patch(partial || {});
@@ -722,7 +726,7 @@ function registerIpc() {
     ffmpeg: exporter.ffmpegPath(),
     temp: tempDir(),
   }));
-  ipcMain.handle("export:begin", (_e, payload) => beginExport(payload));
+  ipcMain.handle("export:begin", (event, payload) => beginExport(payload, event.sender));
   ipcMain.handle("export:chunk", (_e, payload) => writeExportChunk(payload));
   ipcMain.handle("export:finish", (_e, payload) => finishExport(payload));
   ipcMain.handle("export:cancel", () => cancelExport());
@@ -757,7 +761,9 @@ function registerIpc() {
     prefs.set("appearance", value);
     applyTheme();
     broadcast("app:theme", currentTheme());
-    return currentTheme();
+    /* Same contract as `prefs:set`: the settings window stores what it gets
+       back as its preference snapshot. */
+    return prefs.get();
   });
   ipcMain.handle("app:quit", () => app.quit());
   ipcMain.handle("app:open-external", (_e, url) => shell.openExternal(url));
@@ -865,6 +871,25 @@ async function runSmokeTest(outputDir, projectPath) {
 
   const settings = windows.createSettings();
   await shoot("03-settings", settings, 2800);
+
+  /* The settings window keeps its preference snapshot in one variable, so the
+     write calls have to hand back the whole store. */
+  if (process.env.DOGSC_PREFS_PROBE) {
+    const check = await settings.webContents.executeJavaScript(
+      `(async () => {
+         const before = await window.dogsc.prefs.all();
+         const after = await window.dogsc.prefs.set("previewQuality", before.previewQuality);
+         const theme = await window.dogsc.app.setTheme(before.appearance);
+         return {
+           afterKeys: Object.keys(after || {}).length,
+           afterAppearance: after?.appearance,
+           afterQuality: after?.previewQuality,
+           themeKeys: Object.keys(theme || {}).length,
+         };
+       })()`
+    );
+    console.log("[prefs-probe]", JSON.stringify(check));
+  }
 
   if (projectPath && fs.existsSync(projectPath)) {
     const editor = windows.createEditor({ projectPath });
@@ -1735,6 +1760,9 @@ async function runEditTest(win) {
         document.getElementById("top-right")?.children.length ?? -1,
       ],
       rail: document.getElementById("tool-rail")?.children.length ?? -1,
+      railEnabled: Array.from(document.querySelectorAll("#tool-rail .rail-button"))
+        .map((button) => button.dataset.tool + (button.disabled ? ":off" : ":on"))
+        .join(","),
       inspector: document.getElementById("inspector-body")?.children.length ?? -1,
       lanes: document.querySelectorAll(".lane").length,
       clips: document.querySelectorAll(".clip").length,
@@ -1758,6 +1786,12 @@ async function runEditTest(win) {
             ])
           )
         : "not exposed",
+      pointer: window.__dogscStore
+        ? {
+            samples: window.__dogscStore.document?.pointerTrack?.samples?.length ?? -1,
+            clicks: window.__dogscStore.document?.pointerTrack?.clicks?.length ?? -1,
+          }
+        : null,
     }))()`);
     console.log(`[smoke:${name}]`, JSON.stringify(summary));
   } catch (error) {
@@ -2099,12 +2133,39 @@ async function buildProjectFromSession(captured, pointerTrack, markers, config) 
 /* Export                                                                    */
 /* ------------------------------------------------------------------------- */
 
-async function beginExport(payload) {
-  if (exportJob) return { ok: false, reason: "busy" };
+const EXPORT_IDLE_MS = 20000;
+
+async function beginExport(payload, sender) {
+  if (exportJob) {
+    /* A renderer that aborted before `finish` — an encoder error, a closed
+       window, a crash — used to leave the job registered forever, and every
+       later export then failed with "busy". Such a job is reclaimed here. A
+       job that is already muxing is left alone: ffmpeg can run for minutes
+       without producing chunks, and that is not staleness. */
+    const owner = exportJob.ownerId ? webContents.fromId(exportJob.ownerId) : null;
+    const ownerGone = Boolean(exportJob.ownerId) && (!owner || owner.isDestroyed());
+    const idle =
+      exportJob.stage === "encoding" && Date.now() - (exportJob.lastActivity || 0) > EXPORT_IDLE_MS;
+    if (ownerGone || idle) {
+      console.warn(`[export] reclaiming a stale job (ownerGone=${ownerGone} idle=${idle})`);
+      if (exportJob.handle) await exportJob.handle.close().catch(() => {});
+      try {
+        exportJob.controller.abort();
+      } catch {
+        /* nothing to abort */
+      }
+      exportJob = null;
+    } else {
+      return { ok: false, reason: "busy" };
+    }
+  }
   const dir = await ensureDir(tempDir("export"));
   const stamp = Date.now();
   exportJob = {
     dir,
+    ownerId: sender?.id ?? null,
+    stage: "encoding",
+    lastActivity: Date.now(),
     outputPath: payload.outputPath,
     codec: payload.codec,
     fps: payload.fps,
@@ -2131,6 +2192,7 @@ async function beginExport(payload) {
 
 async function writeExportChunk(payload) {
   if (!exportJob || exportJob.cancelled) return { ok: false };
+  exportJob.lastActivity = Date.now();
   const buffer = Buffer.from(payload.data);
   if (exportJob.mode === "frames") {
     exportJob.frameIndex += 1;
@@ -2158,6 +2220,10 @@ async function writeExportChunk(payload) {
 async function finishExport(payload) {
   if (!exportJob) return { ok: false, reason: "no-job" };
   const job = exportJob;
+  /* Muxing can take minutes without producing chunks, so a job in this stage
+     must never be reclaimed as idle. */
+  job.stage = "finishing";
+  job.lastActivity = Date.now();
   try {
     if (job.handle) {
       await job.handle.close();
