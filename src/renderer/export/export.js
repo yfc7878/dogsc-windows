@@ -374,6 +374,10 @@ async function renderPreview() {
   renderFrame(ctx, state.document, time, {
     width,
     height,
+    /* Same reason as the editor preview: the canvas is backed at device
+       resolution, so the frame has to be scaled to match or it lands in the
+       top-left corner at 1/dpr size. */
+    scale: dpr,
     sources: {
       screen: state.media.screen,
       camera: state.media.camera,

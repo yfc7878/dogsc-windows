@@ -670,6 +670,9 @@ function resizePreview() {
   canvas.style.height = `${height}px`;
   ui.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ui.displaySize = { width, height };
+  /* Kept so `render()` can hand the compositor the same scale the canvas was
+     sized with — the frame must fill the whole backing store. */
+  ui.displayScale = dpr;
 
   layoutCropOverlay();
 }
@@ -729,6 +732,7 @@ function render() {
   const result = renderFrame(ui.ctx, store.document, store.playhead, {
     width: ui.displaySize.width,
     height: ui.displaySize.height,
+    scale: ui.displayScale || 1,
     sources: store.sources,
     interactive: true,
   });

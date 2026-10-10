@@ -1135,10 +1135,18 @@ export function setInteractiveSelection(value) {
  * @param {object} options   { width, height, sources, interactive }
  */
 export function renderFrame(ctx, document, time, options) {
-  const { width, height, sources = {} } = options;
+  const { width, height, sources = {}, scale = 1 } = options;
   ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, width, height);
+  /* The frame is authored in CSS pixels, but a caller may back its canvas with
+     more device pixels than that (the editor preview does, so the composite is
+     drawn at native resolution). Honouring the caller's scale is what makes the
+     picture fill the canvas: resetting to identity drew the whole frame at
+     1/dpr of its size, anchored to the top-left corner, which on a 125% display
+     left the right and bottom fifth of the preview unpainted. */
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  /* Padded by a couple of CSS pixels because the backing store is floored
+     (`Math.floor(width * dpr)`), so the exact edge can fall a fraction short. */
+  ctx.clearRect(-2, -2, width + 4, height + 4);
 
   drawBackground(ctx, document, time, width, height, sources);
 
