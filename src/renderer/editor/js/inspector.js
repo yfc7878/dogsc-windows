@@ -11,6 +11,7 @@ import { t } from "../../shared/i18n.js";
 import {
   attachTooltip,
   choiceGroup,
+  isControlDragging,
   segmented,
   showMenu,
   sliderRow,
@@ -137,7 +138,14 @@ export function mountInspector(root) {
     </div>
     <div class="inspector-body" id="inspector-body"></div>
   `;
-  store.subscribe(() => paintInspector());
+  /* Rebuilding the surface mid-drag would remove the control under the pointer
+     and cancel the gesture, which is why a held slider used to snap back to
+     click-only stepping. The value is applied continuously either way; the
+     repaint happens once the gesture ends. */
+  store.subscribe(() => {
+    if (isControlDragging()) return;
+    paintInspector();
+  });
   paintInspector();
 }
 

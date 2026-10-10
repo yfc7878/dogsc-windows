@@ -31,6 +31,8 @@ const DEFAULTS = {
 
   /* Preview */
   previewQuality: "smooth",
+  /* Timeline clips show the audio waveform instead of thumbnails. */
+  waveformClips: false,
 
   /* Updates */
   autoCheckUpdates: true,

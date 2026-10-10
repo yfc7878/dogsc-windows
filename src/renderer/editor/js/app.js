@@ -58,6 +58,8 @@ async function boot() {
   store.previewQuality = prefs.previewQuality || "smooth";
   store.scenePresets = Array.isArray(prefs.scenePresets) ? prefs.scenePresets : [];
   store.defaultSceneName = prefs.defaultScenePreset?.name || null;
+  /* Remembered from the last session, like the original's `waveform-clips`. */
+  store.filmstripMode = prefs.waveformClips ? "waveform" : "picture";
   store.cameraLayoutPresets = Array.isArray(prefs.cameraLayoutPresets)
     ? prefs.cameraLayoutPresets
     : [];

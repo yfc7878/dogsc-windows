@@ -10,6 +10,29 @@ import { icon } from "./icons.js";
 import { t } from "./i18n.js";
 
 /* -------------------------------------------------------------------------
+   Native control drag guard
+   ------------------------------------------------------------------------- */
+
+/**
+ * Whether a native control (a range slider) is mid-gesture.
+ *
+ * Surfaces that rebuild themselves on every model change have to ask first:
+ * replacing the element under the pointer cancels the browser's own drag, so
+ * the control ends up adjustable by clicking only. The original keeps a draft
+ * for exactly this reason — its inspector never tears the slider down while
+ * the user is holding it.
+ */
+let activeDrags = 0;
+
+export function isControlDragging() {
+  return activeDrags > 0;
+}
+
+function setControlDragging(active) {
+  activeDrags = Math.max(0, activeDrags + (active ? 1 : -1));
+}
+
+/* -------------------------------------------------------------------------
    Hover tooltip (matches the original's .help() strings)
    ------------------------------------------------------------------------- */
 
@@ -271,8 +294,7 @@ export function segmented(items, value, onSelect, { className = "" } = {}) {
   return wrap;
 }
 
-export function choiceGroup(items, value, onSelect) {
-  const wrap = document.createElement("div");
+export function choiceGroup(items, value, onSelect) {  const wrap = document.createElement("div");
   wrap.className = "choice-row";
   for (const item of items) {
     const btn = document.createElement("button");
@@ -349,12 +371,33 @@ export function sliderRow({
     field.value = format(v);
   };
 
+  /* A native range input captures the pointer for the whole gesture, so its own
+     events are enough to bracket the drag — no window listeners to leak when
+     the row is rebuilt. */
+  let dragging = false;
+  const startDrag = () => {
+    if (dragging) return;
+    dragging = true;
+    setControlDragging(true);
+  };
+  const stopDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    setControlDragging(false);
+  };
+  input.addEventListener("pointerdown", startDrag);
+  input.addEventListener("pointerup", stopDrag);
+  input.addEventListener("pointercancel", stopDrag);
+
   input.addEventListener("input", () => {
     const v = Number(input.value);
     paint(v);
     onChange?.(v);
   });
-  input.addEventListener("change", () => onCommit?.(Number(input.value)));
+  input.addEventListener("change", () => {
+    stopDrag();
+    onCommit?.(Number(input.value));
+  });
 
   field.addEventListener("focus", () => field.select());
   field.addEventListener("keydown", (e) => {

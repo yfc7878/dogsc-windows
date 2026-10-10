@@ -28,7 +28,6 @@ const TRACKS = [
   { id: "screenMotion", label: "屏幕 3D", icon: "spark", height: 34, kind: "screenMotion" },
   { id: "sticker", label: "贴图", icon: "sticker", height: 34, kind: "sticker" },
   { id: "mosaic", label: "打码", icon: "wand", height: 34, kind: "mosaic" },
-  { id: "mosaic", label: "打码", icon: "wand", height: 34, kind: "mosaic" },
   { id: "cameraMotion", label: "摄像运动", icon: "camera", height: 34, kind: "cameraMotion" },
   { id: "audioSystem", label: "系统声音", icon: "speaker", height: 34, kind: "audioSystem" },
   { id: "audioMicrophone", label: "麦克风", icon: "mic", height: 34, kind: "audioMicrophone" },
@@ -37,6 +36,9 @@ const TRACKS = [
 const state = {
   filmstrip: [],
   waveform: [],
+  /* Display gain for the waveform, computed from the analysis (see
+     displayAmplitudeGain). */
+  waveformGain: 1,
   dragging: null,
   hoverSeam: null,
   /** Timeline time under the pointer, or null when the pointer is away.
@@ -150,10 +152,17 @@ function buildToolbar() {
     <button type="button" data-tab="waveform">${icon("wave", 14)}<span>${t("波形")}</span></button>
   `;
   tabs.querySelectorAll("button").forEach((button) => {
+    button.classList.toggle(
+      "is-selected",
+      button.dataset.tab === (store.filmstripMode || "picture")
+    );
     button.addEventListener("click", () => {
       tabs.querySelectorAll("button").forEach((other) => other.classList.remove("is-selected"));
       button.classList.add("is-selected");
       store.filmstripMode = button.dataset.tab;
+      /* Remembered like the original's `waveform-clips` default, so the chosen
+         presentation survives reopening the project. */
+      window.dogsc?.prefs?.set("waveformClips", button.dataset.tab === "waveform");
       paint();
     });
   });
@@ -358,7 +367,6 @@ export function paint() {
     else if (track.kind === "cameraMotion") paintMotion(lane, "cameraMotion");
     else if (track.kind === "sticker") paintSticker(lane);
     else if (track.kind === "mosaic") paintMosaic(lane);
-    else if (track.kind === "mosaic") paintMosaic(lane);
     else paintAudio(lane, track.id);
   }
 
@@ -427,9 +435,14 @@ function paintPrimary(lane) {
     if (store.isPrimarySelected(clip.id)) element.classList.add("is-selected");
 
     const canvas = document.createElement("canvas");
-    canvas.className = "filmstrip";
+    /* The 画面 / 波形 switch decides what the clip itself shows. The original
+       keeps the same clips and swaps their contents, and only offers waveform
+       clips when the project actually has audio to draw. */
+    const showWaveform = store.filmstripMode === "waveform" && state.waveform.length > 0;
+    canvas.className = showWaveform ? "waveform" : "filmstrip";
     element.appendChild(canvas);
-    drawFilmstrip(canvas, clip, duration * pps());
+    if (showWaveform) drawWaveform(canvas, clip, duration * pps(), 46);
+    else drawFilmstrip(canvas, clip, duration * pps());
 
     const label = document.createElement("span");
     label.className = "clip-label";
@@ -613,8 +626,8 @@ function paintAudio(lane, trackId) {
   }
 }
 
-function drawWaveform(canvas, clip, width) {
-  const height = 26;
+function drawWaveform(canvas, clip, width, requestedHeight) {
+  const height = requestedHeight || 26;
   const ratio = window.devicePixelRatio || 1;
   canvas.width = Math.max(2, Math.round(width * ratio));
   canvas.height = Math.round(height * ratio);
@@ -624,7 +637,7 @@ function drawWaveform(canvas, clip, width) {
   ctx.scale(ratio, ratio);
 
   const peaks = state.waveform;
-  ctx.strokeStyle = "rgba(255,255,255,0.72)";
+  ctx.strokeStyle = "rgba(255,255,255,0.78)";
   ctx.lineWidth = 1;
   ctx.beginPath();
   if (!peaks.length) {
@@ -632,6 +645,10 @@ function drawWaveform(canvas, clip, width) {
     ctx.lineTo(width, height / 2);
   } else {
     const total = store.document.timeline.duration || 1;
+    /* `displayGain` normalises typical audible peaks (the 90th percentile,
+       clamped to 1…12) so a quietly recorded track is still legible; it only
+       affects what is drawn, never the exported audio. */
+    const gain = state.waveformGain || 1;
     for (let x = 0; x < width; x += 1) {
       const sourceTime = clip.sourceStart + (x / Math.max(width, 1)) * clip.sourceDuration;
       const index = clamp(
@@ -639,7 +656,7 @@ function drawWaveform(canvas, clip, width) {
         0,
         peaks.length - 1
       );
-      const amplitude = (peaks[index] || 0) * (height / 2 - 1);
+      const amplitude = Math.min(peaks[index] || 0, 1) * gain * (height / 2 - 1);
       ctx.moveTo(x, height / 2 - amplitude);
       ctx.lineTo(x, height / 2 + amplitude);
     }
@@ -1221,10 +1238,39 @@ export async function buildWaveform() {
       peaks[bucket] = peak;
     }
     state.waveform = peaks;
+    state.waveformGain = displayAmplitudeGain(peaks);
     paint();
   } catch (error) {
     console.warn("[timeline] waveform analysis failed", error?.message || error);
   }
+}
+
+/**
+ * Display gain for a waveform.
+ *
+ * Port of the original's `displayAmplitudeGain`: normalise the 90th percentile
+ * of the audible peaks to 0.90 instead of chasing a single transient, clamped
+ * to 1…12 so a quiet track becomes readable without turning hiss into a solid
+ * block. Silence (`no sample >= 0.03`) stays at 1 and draws as a flat line.
+ */
+function displayAmplitudeGain(samples) {
+  const histogram = new Array(256).fill(0);
+  let audibleCount = 0;
+  for (const sample of samples) {
+    if (!Number.isFinite(sample) || sample < 0.03) continue;
+    histogram[Math.min(Math.floor(Math.min(sample, 1) * 255), 255)] += 1;
+    audibleCount += 1;
+  }
+  if (audibleCount === 0) return 1;
+  const target = Math.max(Math.floor(audibleCount * 0.9), 1);
+  let accumulated = 0;
+  for (let index = 0; index < histogram.length; index += 1) {
+    accumulated += histogram[index];
+    if (accumulated >= target) {
+      return Math.min(Math.max(0.9 / Math.max(index / 255, 0.03), 1), 12);
+    }
+  }
+  return 1;
 }
 
 /* ------------------------------------------------------------------------- */

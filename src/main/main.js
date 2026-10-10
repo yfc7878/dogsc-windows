@@ -156,6 +156,8 @@ let pendingStop = null;
 let exportJob = null;
 /** Resolver waiting for the capture surface to confirm the stream is live. */
 let pendingStart = null;
+/** Destination preference saved by a click-through export run, restored after. */
+let previousExportLocation;
 
 /** Called by the capture surface once it knows whether the stream started. */
 function settleStart(result) {
@@ -913,8 +915,12 @@ async function runSmokeTest(outputDir, projectPath) {
       media[role] = { relative: entry.path, absolute: path.join(projectPath, entry.path) };
     }
     /* The panel seeds its destination folder from this preference, so the
-       click-through reproduction needs it pointing at the output directory. */
-    if (process.env.DOGSC_EXPORT_CLICK) prefs.set("exportLocation", outputDir);
+       click-through reproduction needs it pointing at the output directory. The
+       previous value is restored once the run finishes. */
+    if (process.env.DOGSC_EXPORT_CLICK) {
+      previousExportLocation = prefs.get("exportLocation");
+      prefs.set("exportLocation", outputDir);
+    }
     const exportPanel = windows.createExportPanel({
       packagePath: projectPath,
       document: document_,
@@ -1366,7 +1372,11 @@ async function runExportTest(win, outputDir) {
   const options = process.env.DOGSC_EXPORT_OPTIONS || "{}";
   if (process.env.DOGSC_EXPORT_CLICK) {
     /* Reproduce the user's path exactly: whatever the panel is set to, with the
-       full timeline and the editor's range. */
+       full timeline and the editor's range. The panel seeds its folder from the
+       preference, so it is pointed at the output directory for the run and put
+       back afterwards — a test must never leave the user exporting elsewhere. */
+    previousExportLocation = prefs.get("exportLocation");
+    prefs.set("exportLocation", outputDir);
     await win.webContents.executeJavaScript(`document.getElementById("btn-start").click(), true`);
   } else {
     await win.webContents.executeJavaScript(
@@ -1385,6 +1395,12 @@ async function runExportTest(win, outputDir) {
     if (String(status).includes("导出完成") || String(status).includes("失败")) break;
   }
   console.log(`[export-test] renderer status: ${status}`);
+
+  /* Put the user's destination preference back after a click-through run. */
+  if (previousExportLocation !== undefined) {
+    prefs.set("exportLocation", previousExportLocation);
+    previousExportLocation = undefined;
+  }
 
   if (!fs.existsSync(target)) {
     console.error("[export-test] no output file was produced");
@@ -1792,6 +1808,12 @@ async function runEditTest(win) {
             clicks: window.__dogscStore.document?.pointerTrack?.clicks?.length ?? -1,
           }
         : null,
+      timelinePresentation: {
+        mode: window.__dogscStore?.filmstripMode ?? "?",
+        waveformClips: document.querySelectorAll(".clip-primary .waveform").length,
+        filmstripClips: document.querySelectorAll(".clip-primary .filmstrip").length,
+        audioWaveforms: document.querySelectorAll(".clip-audio .waveform").length,
+      },
     }))()`);
     console.log(`[smoke:${name}]`, JSON.stringify(summary));
   } catch (error) {
@@ -2225,6 +2247,10 @@ async function finishExport(payload) {
   job.stage = "finishing";
   job.lastActivity = Date.now();
   try {
+    /* The destination folder can disappear between choosing it and exporting.
+       Recreating it here keeps that from surfacing as an unintelligible wall
+       of ffmpeg output about a file it could not open. */
+    await ensureDir(path.dirname(job.outputPath));
     if (job.handle) {
       await job.handle.close();
       job.handle = null;
