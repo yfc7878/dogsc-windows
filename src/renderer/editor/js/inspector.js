@@ -141,9 +141,22 @@ export function mountInspector(root) {
   /* Rebuilding the surface mid-drag would remove the control under the pointer
      and cancel the gesture, which is why a held slider used to snap back to
      click-only stepping. The value is applied continuously either way; the
-     repaint happens once the gesture ends. */
-  store.subscribe(() => {
+     repaint happens once the gesture ends.
+     High-frequency notifications are also skipped: during playback `tick`
+     fires every frame and scrubbing fires `playhead` every frame — rebuilding
+     this panel for those used to flicker the whole inspector and burn CPU for
+     nothing. The timeline and the preview repaint themselves for those. */
+  store.subscribe((_store, reason) => {
     if (isControlDragging()) return;
+    if (
+      reason === "tick" ||
+      reason === "playhead" ||
+      reason === "play" ||
+      reason === "saved" ||
+      reason === "clipboard"
+    ) {
+      return;
+    }
     paintInspector();
   });
   paintInspector();

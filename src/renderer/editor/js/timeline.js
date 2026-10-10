@@ -1157,10 +1157,34 @@ export function syncMedia(playing) {
 /* ------------------------------------------------------------------------- */
 
 export async function buildFilmstrip() {
-  const video = store.media.screen;
-  if (!video) return;
+  const preview = store.media.screen;
+  if (!preview) return;
+  const src = preview.currentSrc || preview.src;
+  if (!src) return;
+  /* The frames are harvested from a *private* video element. Seeking the
+     preview's own element yanks the picture the user is looking at to thumbnail
+     timestamps and back — the preview and `syncMedia` then fight over the
+     `seeked` event and the whole surface flickers until the analysis finishes.
+     A private element is invisible to the preview loop by construction. */
+  const video = document.createElement("video");
+  video.muted = true;
+  video.preload = "auto";
+  video.src = src;
+  const metadataReady = new Promise((resolve) => {
+    if (video.readyState >= 1) return resolve();
+    video.addEventListener("loadedmetadata", resolve, { once: true });
+    video.addEventListener("error", resolve, { once: true });
+    setTimeout(resolve, 4000);
+  });
+  await metadataReady;
+  if (!video.videoWidth) {
+    video.removeAttribute("src");
+    video.load();
+    return;
+  }
+
   const count = 24;
-  const duration = video.duration && Number.isFinite(video.duration)
+  const duration = Number.isFinite(video.duration) && video.duration > 0
     ? video.duration
     : store.document.media?.screen?.duration || 1;
   const frames = [];
@@ -1182,6 +1206,8 @@ export async function buildFilmstrip() {
       /* skip frames that cannot be decoded */
     }
   }
+  video.removeAttribute("src");
+  video.load();
   state.filmstrip = frames;
   paint();
 }

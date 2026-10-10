@@ -307,6 +307,10 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   pointer.stop();
   globalShortcut.unregisterAll();
+  /* Saves are debounced now (see Preferences.scheduleSave), so any change that
+     landed in the last 250ms — window positions most commonly — is still only
+     in memory when the app goes down. */
+  prefs.flushSync();
   /* Tear the windows down explicitly so a renderer never outlives the app
      during shutdown. */
   windows?.closeAll();

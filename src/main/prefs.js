@@ -64,6 +64,9 @@ class Preferences {
   constructor() {
     this.file = path.join(app.getPath("userData"), "preferences.json");
     this.data = { ...DEFAULTS };
+    /** A write is scheduled but has not hit the disk yet. */
+    this.saveTimer = null;
+    this.savePending = false;
     this.load();
   }
 
@@ -101,14 +104,47 @@ class Preferences {
 
   set(key, value) {
     this.data[key] = value;
-    this.save();
+    this.scheduleSave();
     return value;
   }
 
   patch(partial) {
     this.data = mergeDeep(this.data, partial);
-    this.save();
+    this.scheduleSave();
     return this.data;
+  }
+
+  /**
+   * Debounced save.
+   *
+   * Writes used to be synchronous and immediate, which was invisible until the
+   * window-geometry handlers were wired up: on Windows the `moved` event fires
+   * on *every frame of a drag*, so dragging any window hammered the message
+   * loop with mkdir + writeFileSync + rename per frame. That stall is what made
+   * window drags flicker and jump. Updates now land in memory instantly and the
+   * disk write trails 250ms behind the *last* change — a drag only ever writes
+   * once, after the mouse settles.
+   */
+  scheduleSave() {
+    this.savePending = true;
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      this.savePending = false;
+      this.save();
+    }, 250);
+  }
+
+  /** Synchronous flush for shutdown paths, so trailing edits are never lost. */
+  flushSync() {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (this.savePending) {
+      this.savePending = false;
+      this.save();
+    }
   }
 
   save() {
