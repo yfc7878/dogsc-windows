@@ -750,7 +750,15 @@ function drawPerspective(ctx, video, rect, source) {
   /* The mesh follows the on-screen size: the preview stays cheap, the
      full-resolution export gets the finer grid it needs. */
   const longest = Math.max(rect.width, rect.height);
-  const divisions = Math.max(12, Math.min(28, Math.round(longest / 40)));
+  const divisions = Math.max(16, Math.min(28, Math.round(longest / 40)));
+
+  /* Cells are drawn as the parallelogram through three of their corners, so a
+     shared edge is two straight segments where the projection wants a curve.
+     They are pushed outwards by a fixed number of pixels — an absolute overlap,
+     not a percentage — because the cells that need it most are the ones the
+     projection has squashed flat, where a percentage rounds away to nothing.
+     Without it the background shows through as a faint mesh over the card. */
+  const overlapPx = 0.75;
 
   for (let row = 0; row < divisions; row += 1) {
     const v0 = row / divisions;
@@ -770,23 +778,18 @@ function drawPerspective(ctx, video, rect, source) {
       const sourceHeight = source.sh / divisions;
       if (sourceWidth < 0.01 || sourceHeight < 0.01) continue;
 
-      /* Inflated by a hair around the cell centre so neighbours overlap by a
-         sub-pixel instead of leaving antialiased seams. */
       const centreX = (p00.x + p10.x + p01.x) / 3;
       const centreY = (p00.y + p10.y + p01.y) / 3;
-      const grow = 1.01;
-      const g00 = {
-        x: centreX + (p00.x - centreX) * grow,
-        y: centreY + (p00.y - centreY) * grow,
+      const grow = (point) => {
+        const dx = point.x - centreX;
+        const dy = point.y - centreY;
+        const length = Math.hypot(dx, dy);
+        if (length < 0.0001) return point;
+        return { x: point.x + (dx / length) * overlapPx, y: point.y + (dy / length) * overlapPx };
       };
-      const g10 = {
-        x: centreX + (p10.x - centreX) * grow,
-        y: centreY + (p10.y - centreY) * grow,
-      };
-      const g01 = {
-        x: centreX + (p01.x - centreX) * grow,
-        y: centreY + (p01.y - centreY) * grow,
-      };
+      const g00 = grow(p00);
+      const g10 = grow(p10);
+      const g01 = grow(p01);
 
       ctx.save();
       /* Composed with the caller's transform rather than replacing it, so the
