@@ -366,7 +366,7 @@ function normalizeMotionClips(list) {
       rotation: num(clip.target?.rotation, 0),
       tiltX: num(clip.target?.tiltX, 0),
       tiltY: num(clip.target?.tiltY, 0),
-      perspective: clamp(num(clip.target?.perspective, 0.5), 0, 1),
+      perspective: clamp(num(clip.target?.perspective, 0.65), 0, 2),
       opacity: clamp(num(clip.target?.opacity, 1), 0, 1),
       cornerRadius: clamp(num(clip.target?.cornerRadius, 0), 0, 160),
     },

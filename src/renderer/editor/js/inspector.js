@@ -1227,8 +1227,10 @@ function renderScreen3D(body, clip) {
     sliderRow({
       label: t("3D 倾斜 X 角度"),
       value: clip.target.tiltX,
-      min: -60,
-      max: 60,
+      /* Limits match the original's tilt pad (X ±28°, Y ±32°), which is what
+         bounds the reachable foreshortening in the macOS build. */
+      min: -28,
+      max: 28,
       step: 1,
       format: (v) => String(Math.round(v)),
       suffix: "°",
@@ -1246,8 +1248,8 @@ function renderScreen3D(body, clip) {
     sliderRow({
       label: t("3D 倾斜 Y 角度"),
       value: clip.target.tiltY,
-      min: -60,
-      max: 60,
+      min: -32,
+      max: 32,
       step: 1,
       format: (v) => String(Math.round(v)),
       suffix: "°",
@@ -1285,10 +1287,9 @@ function renderScreen3D(body, clip) {
       label: t("透视强度"),
       value: clip.target.perspective,
       min: 0,
-      max: 1,
+      max: 2,
       step: 0.01,
-      format: (v) => String(Math.round(v * 100)),
-      suffix: "%",
+      format: (v) => v.toFixed(2),
       onChange: (v) =>
         store.apply((doc) => {
           const target = doc.timeline.screenMotionClips.find((entry) => entry.id === clip.id);

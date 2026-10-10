@@ -506,8 +506,8 @@ function drawScreenContent(ctx, document, rect, sources) {
   ctx.save();
   ctx.globalAlpha = rect.opacity ?? 1;
 
-  const has3D = Math.abs(rect.tiltX) > 0.01 || Math.abs(rect.tiltY) > 0.01;
-  if (has3D) {
+  const is3D = hasScreen3D(rect);
+  if (is3D) {
     drawPerspective(ctx, video, rect, { sx, sy, sw, sh });
     ctx.restore();
     return true;
@@ -527,70 +527,295 @@ function drawScreenContent(ctx, document, rect, sources) {
   return true;
 }
 
+/* ------------------------------------------------------------------------- */
+/* Screen 3D projection                                                      */
+/* ------------------------------------------------------------------------- */
+
+/** Whether a layout rect carries enough 3D to need the projective path. */
+function hasScreen3D(rect) {
+  return Math.abs(rect.tiltX) > 0.01 || Math.abs(rect.tiltY) > 0.01;
+}
+
+/**
+ * Projects the screen rectangle into the 3D quad.
+ *
+ * This is a direct port of the original's `ScreenProjection.project`: the card
+ * is rotated around X, then Y, then Z, and the result is divided by a camera
+ * distance derived from the card's longest side, so `perspective` behaves like
+ * a depth rather than a focal length and reads the same on any canvas size.
+ * `perspective == 0` is orthographic; with no rotation the projection is the
+ * identity, which is why a perspective change alone never moves a flat card.
+ */
+export function projectedScreenQuad(rect, options = {}) {
+  const rotationX = options.rotationX || 0;
+  const rotationY = options.rotationY || 0;
+  const rotationZ = options.rotationZ || 0;
+  const perspective = options.perspective || 0;
+  const anchor = options.anchor || null;
+
+  const width = Math.max(rect.width, 0);
+  const height = Math.max(rect.height, 0);
+  const pivot =
+    anchor && Number.isFinite(anchor.x) && Number.isFinite(anchor.y)
+      ? anchor
+      : { x: rect.x + width / 2, y: rect.y + height / 2 };
+
+  const maximumDimension = Math.max(rect.width, rect.height, 1);
+  const depth = Math.min(Math.max(perspective, 0), 2);
+  const cameraDistance =
+    depth > 0 ? (maximumDimension * 2) / Math.max(depth, 0.0001) : Infinity;
+
+  const radians = (value) => (value * Math.PI) / 180;
+  const sinX = Math.sin(radians(rotationX));
+  const cosX = Math.cos(radians(rotationX));
+  const sinY = Math.sin(radians(rotationY));
+  const cosY = Math.cos(radians(rotationY));
+  const sinZ = Math.sin(radians(rotationZ));
+  const cosZ = Math.cos(radians(rotationZ));
+
+  const project = (x, y) => {
+    const xAfterX = x;
+    const yAfterX = y * cosX;
+    const zAfterX = y * sinX;
+
+    const xAfterY = xAfterX * cosY + zAfterX * sinY;
+    const yAfterY = yAfterX;
+    const zAfterY = -xAfterX * sinY + zAfterX * cosY;
+
+    const xAfterZ = xAfterY * cosZ - yAfterY * sinZ;
+    const yAfterZ = xAfterY * sinZ + yAfterY * cosZ;
+
+    let projectionScale = 1;
+    if (Number.isFinite(cameraDistance)) {
+      /* The denominator is floored so authored extremes can never produce a
+         NaN/Infinity quad. */
+      const denominator = Math.max(cameraDistance - zAfterY, cameraDistance * 0.12);
+      projectionScale = cameraDistance / denominator;
+    }
+    return {
+      x: pivot.x + xAfterZ * projectionScale,
+      y: pivot.y + yAfterZ * projectionScale,
+    };
+  };
+
+  return {
+    topLeft: project(rect.x - pivot.x, rect.y - pivot.y),
+    topRight: project(rect.x + width - pivot.x, rect.y - pivot.y),
+    bottomRight: project(rect.x + width - pivot.x, rect.y + height - pivot.y),
+    bottomLeft: project(rect.x - pivot.x, rect.y + height - pivot.y),
+  };
+}
+
+/**
+ * Maps normalized card coordinates (0..1 across the card) onto the projected
+ * quad, using the same eight-parameter homography as the original's
+ * `ProjectedScreenPointMapper`. Returns null for degenerate geometry.
+ */
+function unitSquareHomography(quad) {
+  const { topLeft, topRight, bottomRight, bottomLeft } = quad;
+  const finite = [topLeft, topRight, bottomRight, bottomLeft].every(
+    (point) => Number.isFinite(point.x) && Number.isFinite(point.y)
+  );
+  if (!finite) return null;
+
+  const dx1 = topRight.x - bottomRight.x;
+  const dx2 = bottomLeft.x - bottomRight.x;
+  const dx3 = topLeft.x - topRight.x + bottomRight.x - bottomLeft.x;
+  const dy1 = topRight.y - bottomRight.y;
+  const dy2 = bottomLeft.y - bottomRight.y;
+  const dy3 = topLeft.y - topRight.y + bottomRight.y - bottomLeft.y;
+  const denominator = dx1 * dy2 - dx2 * dy1;
+
+  let perspectiveX = 0;
+  let perspectiveY = 0;
+  if (Math.abs(dx3) > 1e-9 || Math.abs(dy3) > 1e-9) {
+    if (Math.abs(denominator) <= 1e-9) return null;
+    perspectiveX = (dx3 * dy2 - dx2 * dy3) / denominator;
+    perspectiveY = (dx1 * dy3 - dx3 * dy1) / denominator;
+  }
+
+  const a = topRight.x - topLeft.x + perspectiveX * topRight.x;
+  const b = bottomLeft.x - topLeft.x + perspectiveY * bottomLeft.x;
+  const d = topRight.y - topLeft.y + perspectiveX * topRight.y;
+  const e = bottomLeft.y - topLeft.y + perspectiveY * bottomLeft.y;
+
+  return (u, v) => {
+    const divisor = perspectiveX * u + perspectiveY * v + 1;
+    if (!Number.isFinite(divisor) || Math.abs(divisor) < 1e-9) return null;
+    const x = (a * u + b * v + topLeft.x) / divisor;
+    const y = (d * u + e * v + topLeft.y) / divisor;
+    return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+  };
+}
+
+/** The projected quad for a layout rect, or null when the card is flat. */
+function screenQuadFor(rect, inflate = 0) {
+  if (!hasScreen3D(rect)) return null;
+  return projectedScreenQuad(
+    {
+      x: rect.x - inflate,
+      y: rect.y - inflate,
+      width: rect.width + inflate * 2,
+      height: rect.height + inflate * 2,
+    },
+    {
+      rotationX: rect.tiltX,
+      rotationY: rect.tiltY,
+      rotationZ: rect.rotation,
+      perspective: rect.perspective,
+      /* The pivot stays the card's own centre, so inflating for a border keeps
+         the projection identical to the content's. */
+      anchor: { x: rect.centerX, y: rect.centerY },
+    }
+  );
+}
+
+function traceQuad(ctx, quad) {
+  ctx.beginPath();
+  ctx.moveTo(quad.topLeft.x, quad.topLeft.y);
+  ctx.lineTo(quad.topRight.x, quad.topRight.y);
+  ctx.lineTo(quad.bottomRight.x, quad.bottomRight.y);
+  ctx.lineTo(quad.bottomLeft.x, quad.bottomLeft.y);
+  ctx.closePath();
+}
+
+/**
+ * Traces a projected quad with rounded corners.
+ *
+ * The original rounds the card in native source coordinates and only then
+ * projects it; Canvas has no projective sampler, so the radius is converted
+ * through the projection's average scale instead. That keeps a rounded card
+ * rounded under 3D while the content, the shadow and the border all share the
+ * exact same outline — a sharp shadow under a rounded card would show black
+ * corners through it.
+ */
+function traceProjectedPath(ctx, quad, rect, cornerRadius) {
+  const meanLength = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
+  const projectedWidth =
+    (meanLength(quad.topLeft, quad.topRight) + meanLength(quad.bottomLeft, quad.bottomRight)) / 2;
+  const projectedHeight =
+    (meanLength(quad.topLeft, quad.bottomLeft) + meanLength(quad.topRight, quad.bottomRight)) / 2;
+  const scaleX = rect.width > 0 ? projectedWidth / rect.width : 1;
+  const scaleY = rect.height > 0 ? projectedHeight / rect.height : 1;
+  const radius = Math.max(0, cornerRadius) * Math.min(scaleX, scaleY);
+  if (radius < 0.5) {
+    traceQuad(ctx, quad);
+    return;
+  }
+
+  const corners = [quad.topLeft, quad.topRight, quad.bottomRight, quad.bottomLeft];
+  ctx.beginPath();
+  for (let index = 0; index < corners.length; index += 1) {
+    const corner = corners[index];
+    const next = corners[(index + 1) % corners.length];
+    const previous = corners[(index + corners.length - 1) % corners.length];
+    const toNext = unitTowards(corner, next, radius);
+    const toPrevious = unitTowards(corner, previous, radius);
+    if (index === 0) ctx.moveTo(toPrevious.x, toPrevious.y);
+    else ctx.lineTo(toPrevious.x, toPrevious.y);
+    ctx.quadraticCurveTo(corner.x, corner.y, toNext.x, toNext.y);
+  }
+  ctx.closePath();
+}
+
+/** A point `distance` from `from` along the edge towards `to`, clamped to half the edge. */
+function unitTowards(from, to, distance) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy);
+  if (length < 0.001) return { x: from.x, y: from.y };
+  const step = Math.min(distance, length / 2) / length;
+  return { x: from.x + dx * step, y: from.y + dy * step };
+}
+
 /**
  * Perspective warp for Screen 3D.
  *
- * Canvas 2D has no projective transform, so the quad is drawn as a stack of
- * horizontal bands, each an affine approximation of its trapezoid. This is the
- * same technique the original's renderer falls back to when a full projective
- * sampler is not available, and at 56 bands the seams are invisible.
+ * Canvas 2D has no projective sampler, so the quad is filled with a grid of
+ * small cells, each drawn as the affine transform through its own three
+ * corners. Those corners come from the exact homography of the quad, so the
+ * result follows the original's single perspective pass — including the
+ * Z rotation and the asymmetric foreshortening that a stack of sheared
+ * horizontal bands cannot express.
  */
 function drawPerspective(ctx, video, rect, source) {
-  const bands = 56;
-  const tiltXRad = (rect.tiltX * Math.PI) / 180;
-  const tiltYRad = (rect.tiltY * Math.PI) / 180;
-  const depth = 1.2;
-
-  const project = (nx, ny) => {
-    const x = (nx - 0.5) * rect.width;
-    const y = (ny - 0.5) * rect.height;
-    const z = x * Math.sin(tiltYRad) + y * Math.sin(tiltXRad);
-    const w = Math.max(0.2, 1 - z / (rect.width * depth));
-    return { x: rect.centerX + (x / w), y: rect.centerY + (y / w), w };
-  };
+  const quad = screenQuadFor(rect);
+  const map = quad && unitSquareHomography(quad);
+  if (!map) return false;
 
   ctx.save();
-  ctx.globalAlpha = rect.opacity ?? 1;
-  roundRect(ctx, rect.x, rect.y, rect.width, rect.height, rect.cornerRadius);
+  traceProjectedPath(ctx, quad, rect, rect.cornerRadius);
   ctx.clip();
 
-  for (let band = 0; band < bands; band += 1) {
-    const t0 = band / bands;
-    const t1 = (band + 1) / bands;
-    const topLeft = project(0, t0);
-    const topRight = project(1, t0);
-    const bottomLeft = project(0, t1);
-    const bottomRight = project(1, t1);
+  /* The mesh follows the on-screen size: the preview stays cheap, the
+     full-resolution export gets the finer grid it needs. */
+  const longest = Math.max(rect.width, rect.height);
+  const divisions = Math.max(12, Math.min(28, Math.round(longest / 40)));
 
-    const topWidth = topRight.x - topLeft.x;
-    const bottomWidth = bottomRight.x - bottomLeft.x;
-    const destinationWidth = (topWidth + bottomWidth) / 2;
-    if (destinationWidth <= 0.2) continue;
+  for (let row = 0; row < divisions; row += 1) {
+    const v0 = row / divisions;
+    const v1 = (row + 1) / divisions;
+    for (let column = 0; column < divisions; column += 1) {
+      const u0 = column / divisions;
+      const u1 = (column + 1) / divisions;
 
-    const destinationHeight = bottomLeft.y - topLeft.y;
-    if (destinationHeight <= 0.2) continue;
+      const p00 = map(u0, v0);
+      const p10 = map(u1, v0);
+      const p01 = map(u0, v1);
+      if (!p00 || !p10 || !p01) continue;
 
-    /* Horizontal shear that turns the rectangle into the band's trapezoid. */
-    const shear = (bottomLeft.x - topLeft.x) / Math.max(destinationHeight, 0.001);
-    const scaleX = destinationWidth / rect.width;
+      const sourceX = source.sx + source.sw * u0;
+      const sourceY = source.sy + source.sh * v0;
+      const sourceWidth = source.sw / divisions;
+      const sourceHeight = source.sh / divisions;
+      if (sourceWidth < 0.01 || sourceHeight < 0.01) continue;
 
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.transform(scaleX, 0, shear * scaleX, 1, topLeft.x, topLeft.y);
-    ctx.drawImage(
-      video,
-      source.sx,
-      source.sy + source.sh * t0,
-      source.sw,
-      Math.max(1, (source.sh * (t1 - t0)) / 1),
-      0,
-      0,
-      rect.width,
-      destinationHeight / Math.max(scaleX, 0.001)
-    );
-    ctx.restore();
+      /* Inflated by a hair around the cell centre so neighbours overlap by a
+         sub-pixel instead of leaving antialiased seams. */
+      const centreX = (p00.x + p10.x + p01.x) / 3;
+      const centreY = (p00.y + p10.y + p01.y) / 3;
+      const grow = 1.01;
+      const g00 = {
+        x: centreX + (p00.x - centreX) * grow,
+        y: centreY + (p00.y - centreY) * grow,
+      };
+      const g10 = {
+        x: centreX + (p10.x - centreX) * grow,
+        y: centreY + (p10.y - centreY) * grow,
+      };
+      const g01 = {
+        x: centreX + (p01.x - centreX) * grow,
+        y: centreY + (p01.y - centreY) * grow,
+      };
+
+      ctx.save();
+      /* Composed with the caller's transform rather than replacing it, so the
+         frame still lands in the device-pixel space the canvas is backed with
+         (a preview canvas is backed at `dpr` times its CSS size). */
+      ctx.transform(
+        (g10.x - g00.x) / sourceWidth,
+        (g10.y - g00.y) / sourceWidth,
+        (g01.x - g00.x) / sourceHeight,
+        (g01.y - g00.y) / sourceHeight,
+        g00.x,
+        g00.y
+      );
+      ctx.drawImage(
+        video,
+        sourceX,
+        sourceY,
+        sourceWidth,
+        sourceHeight,
+        0,
+        0,
+        sourceWidth,
+        sourceHeight
+      );
+      ctx.restore();
+    }
   }
   ctx.restore();
+  return true;
 }
 
 function drawScreenShadow(ctx, rect, strength) {
@@ -600,7 +825,11 @@ function drawScreenShadow(ctx, rect, strength) {
   ctx.shadowBlur = Math.max(6, rect.width * 0.045 * strength * 2);
   ctx.shadowOffsetY = Math.max(2, rect.height * 0.02 * strength * 2);
   ctx.fillStyle = "#000";
-  roundRect(ctx, rect.x, rect.y, rect.width, rect.height, rect.cornerRadius);
+  /* Under 3D the shadow has to follow the tilted card, not its unprojected
+     bounding box, or the card looks pasted onto its own shadow. */
+  const quad = screenQuadFor(rect);
+  if (quad) traceProjectedPath(ctx, quad, rect, rect.cornerRadius);
+  else roundRect(ctx, rect.x, rect.y, rect.width, rect.height, rect.cornerRadius);
   ctx.fill();
   ctx.restore();
 }
@@ -611,6 +840,15 @@ function drawScreenBorder(ctx, rect, document) {
   ctx.save();
   ctx.strokeStyle = hexToRgba(document.canvas.borderColor || "#FFFFFF", 1);
   ctx.lineWidth = width;
+  /* The border sits half outside the picture, exactly as in 2D, which under
+     3D means projecting the inflated rect rather than offsetting the quad. */
+  const quad = screenQuadFor(rect, width / 2);
+  if (quad) {
+    traceProjectedPath(ctx, quad, rect, rect.cornerRadius + width / 2);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
   roundRect(
     ctx,
     rect.x - width / 2,
