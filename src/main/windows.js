@@ -19,8 +19,11 @@ const PRELOAD = path.join(__dirname, "..", "preload", "preload.js");
 
 /* Geometry taken from the original's authored window sizes. */
 const SIZES = {
-  recorder: { width: 722, height: 104 },
-  recorderExpanded: { width: 722, height: 104 },
+  /* Extra transparent headroom above the bar fits tooltips/popovers that
+     flip upward, and room below lets the bar's soft shadow render fully
+     instead of being clipped by the window edge. */
+  recorder: { width: 772, height: 126 },
+  recorderExpanded: { width: 772, height: 126 },
   memo: { width: 336, height: 420 },
   editor: { width: 1180, height: 780 },
   exportPanel: { width: 900, height: 664 },
@@ -119,6 +122,9 @@ class WindowManager {
         height: size.height,
         x: area.x,
         y: area.y,
+        /* An opaque backgroundColor would defeat `transparent: true` and paint
+           a solid rectangle around the capsule. */
+        backgroundColor: "#00000000",
         frame: false,
         transparent: true,
         resizable: false,
@@ -162,6 +168,7 @@ class WindowManager {
         y: saved?.y,
         minWidth: 240,
         minHeight: 200,
+        backgroundColor: "#00000000",
         frame: false,
         transparent: true,
         resizable: true,
@@ -200,6 +207,7 @@ class WindowManager {
         transparent: true,
         resizable: false,
         movable: false,
+        backgroundColor: "#00000000",
         alwaysOnTop: true,
         skipTaskbar: true,
         hasShadow: false,

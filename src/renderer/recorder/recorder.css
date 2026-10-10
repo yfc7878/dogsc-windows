@@ -17,7 +17,8 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  padding: 6px;
+  /* Transparent margins: 34px above fits tooltips that flip upward. */
+  padding: 34px 6px 8px;
   gap: 6px;
   background: transparent;
 }
@@ -36,7 +37,9 @@ body {
   border-radius: var(--radius-floating);
   background: var(--panel-surface);
   border: 0.75px solid var(--hairline);
-  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.08);
+  /* No drop shadow — on a transparent window the clipped shadow read as a
+     hard band; the hairline border alone keeps the bar separated. */
+  box-shadow: none;
   -webkit-app-region: drag;
   overflow: hidden;
 }
@@ -48,6 +51,15 @@ body {
 #source-group[hidden],
 .panel[hidden] {
   display: none !important;
+}
+
+/* Fixed-width children must never be squeezed by flex when the row gets
+   tight — squeezed round buttons render as ellipses. */
+.bar > .round-btn,
+.bar .save-to,
+.bar .transport,
+.bar .divider {
+  flex: none;
 }
 
 .divider {

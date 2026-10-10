@@ -23,6 +23,9 @@ import {
 const api = window.dogsc;
 
 const BAR_HEIGHT = 96; // 84px bar + 12px vertical padding
+/* Idle window height: bar (96) + 34px tooltip headroom + 8px bottom padding.
+   Must match SIZES.recorder in windows.js and the root padding in the CSS. */
+const WINDOW_BASE_HEIGHT = 126;
 const PANEL_HEIGHTS = { display: 336, window: 420, device: 300, memo: 0 };
 
 const SOURCE_KINDS = [
@@ -371,7 +374,7 @@ function closePanel() {
 async function resizeForPanel(panelHeight) {
   const bounds = await api.windows.getBounds();
   if (!bounds) return;
-  const height = BAR_HEIGHT + panelHeight;
+  const height = WINDOW_BASE_HEIGHT + panelHeight;
   if (bounds.height === height) return;
   const delta = height - bounds.height;
   await api.windows.setBounds({ height, y: bounds.y - delta });
