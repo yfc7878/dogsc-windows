@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:"
+    />
+    <link rel="stylesheet" href="../shared/tokens.css" />
+    <link rel="stylesheet" href="../shared/ui.css" />
+    <link rel="stylesheet" href="./recorder.css" />
+    <title>DogSC</title>
+  </head>
+  <body>
+    <div class="recorder-root">
+      <section class="panel" id="panel" hidden>
+        <div class="panel-body" id="panel-body"></div>
+      </section>
+
+      <div class="bar drag" id="bar">
+        <!-- Source selection: 显示器 / 窗口 / 区域 / 设备 -->
+        <div class="source-group" id="source-group"></div>
+
+        <div class="divider"></div>
+
+        <!-- Microphone / camera / system audio -->
+        <div class="toggles" id="toggles"></div>
+
+        <div class="divider"></div>
+
+        <!-- Save destination -->
+        <button class="save-to no-drag" id="save-to" type="button">
+          <span class="save-icon" id="save-icon"></span>
+          <span class="save-text">
+            <small id="save-caption">保存到</small>
+            <strong id="save-target">项目</strong>
+          </span>
+          <span class="chev" id="save-chev"></span>
+        </button>
+
+        <div class="spacer"></div>
+
+        <!-- Recording transport, only visible while recording -->
+        <div class="transport" id="transport" hidden>
+          <span class="rec-dot"></span>
+          <span class="rec-time tabular" id="rec-time">00:00.00</span>
+          <button class="round-btn no-drag" id="btn-pause" type="button"></button>
+          <button class="round-btn no-drag" id="btn-stop" type="button"></button>
+          <button class="round-btn no-drag" id="btn-marker" type="button"></button>
+        </div>
+
+        <button class="round-btn no-drag" id="btn-open-project" type="button"></button>
+        <button class="round-btn no-drag" id="btn-memo" type="button"></button>
+        <button class="round-btn no-drag" id="btn-close" type="button"></button>
+      </div>
+    </div>
+
+    <script type="module" src="./recorder.js"></script>
+  </body>
+</html>

@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.log
+
+# Diagnostic captures produced by DOGSC_SMOKE
+shots/
+
+# Generated demo project (rebuild with `npm run demo`)
+demo/
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <link rel="stylesheet" href="../shared/tokens.css" />
+    <link rel="stylesheet" href="../shared/ui.css" />
+    <link rel="stylesheet" href="./settings.css" />
+    <title>设置</title>
+  </head>
+  <body>
+    <div class="settings-root">
+      <aside class="settings-sidebar drag">
+        <div class="sidebar-title">设置</div>
+        <nav id="settings-nav"></nav>
+      </aside>
+      <main class="settings-main">
+        <header class="settings-head drag">
+          <span class="spacer"></span>
+          <button class="btn btn-ghost btn-icon no-drag" id="btn-close" type="button"></button>
+        </header>
+        <div class="settings-body" id="settings-body"></div>
+      </main>
+    </div>
+    <script type="module" src="./settings.js"></script>
+  </body>
+</html>

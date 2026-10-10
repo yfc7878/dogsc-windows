@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    />
+    <link rel="stylesheet" href="../shared/tokens.css" />
+    <link rel="stylesheet" href="../shared/ui.css" />
+    <link rel="stylesheet" href="./onboarding.css" />
+    <title>首次使用引导</title>
+  </head>
+  <body>
+    <div class="intro">
+      <div class="glow"></div>
+      <div class="intro-body">
+        <div class="logo">D</div>
+        <h1 id="title">丝滑录屏</h1>
+        <p id="message">录制、剪辑，让画面自然出彩。</p>
+        <div class="steps" id="steps"></div>
+      </div>
+      <footer class="intro-foot">
+        <span class="progress-dots" id="dots"></span>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost" id="btn-skip" type="button">跳过引导</button>
+        <button class="btn" id="btn-back" type="button">上一步</button>
+        <button class="btn btn-primary" id="btn-next" type="button">下一步</button>
+      </footer>
+    </div>
+    <script type="module" src="./onboarding.js"></script>
+  </body>
+</html>

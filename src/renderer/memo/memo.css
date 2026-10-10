@@ -1,0 +1,112 @@
+/* ==========================================================================
+   Recorder memo — the floating notes window (RecorderMemo.swift)
+   ========================================================================== */
+
+html,
+body {
+  background: transparent;
+  overflow: hidden;
+}
+
+.memo-surface {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-floating);
+  border: 0.75px solid var(--hairline);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.24);
+  overflow: hidden;
+  background: var(--card-elevated);
+  transition: background 0.18s ease;
+}
+
+.memo-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 10px 16px;
+  border-bottom: 0.75px solid var(--hairline);
+  flex: none;
+}
+
+.memo-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.memo-badge {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--secondary-text);
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--group-surface);
+}
+
+.memo-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.memo-editor,
+.memo-reader {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  outline: none;
+  resize: none;
+  padding: 14px 16px;
+  background: transparent;
+  color: var(--primary-text);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.62;
+  user-select: text;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memo-editor::placeholder {
+  color: var(--secondary-text);
+}
+
+.memo-reader {
+  cursor: default;
+}
+
+.memo-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 0.75px solid var(--hairline);
+  flex: none;
+}
+
+.memo-foot input[type="range"] {
+  max-width: 84px;
+  flex: none;
+}
+
+.memo-size {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--secondary-text);
+  min-width: 20px;
+  text-align: center;
+}
+
+.memo-hint,
+.memo-autosave {
+  font-size: 10.5px;
+  color: var(--secondary-text);
+}
+
+.memo-autosave {
+  opacity: 0.85;
+}

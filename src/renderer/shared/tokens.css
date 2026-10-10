@@ -1,0 +1,156 @@
+/* ==========================================================================
+   DogSC Design Tokens
+   Ported 1:1 from Sources/DogSCApp/EditorDesignTokens.swift
+   (Soft Silver / Graphite). Numeric NSColor values are converted to sRGB hex
+   so the Windows build keeps the exact same palette as the macOS original.
+   ========================================================================== */
+
+/* The original ships Alibaba PuHuiTi 3 as the single interface family; the
+   same OTFs are bundled here so the type renders identically. */
+@font-face {
+  font-family: "Alibaba PuHuiTi 3";
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url("app://dogsc/resources/fonts/AlibabaPuHuiTi-3-55-Regular.otf") format("opentype");
+}
+@font-face {
+  font-family: "Alibaba PuHuiTi 3";
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  src: url("app://dogsc/resources/fonts/AlibabaPuHuiTi-3-65-Medium.otf") format("opentype");
+}
+@font-face {
+  font-family: "Alibaba PuHuiTi 3";
+  font-weight: 600 700;
+  font-style: normal;
+  font-display: swap;
+  src: url("app://dogsc/resources/fonts/AlibabaPuHuiTi-3-75-SemiBold.otf") format("opentype");
+}
+
+:root {
+  /* --- Radius (EditorInterfaceRadius) --- */
+  --radius-compact: 8px;
+  --radius-control: 10px;
+  --radius-group: 12px;
+  --radius-card: 16px;
+  --radius-floating: 20px;
+
+  /* --- Heights (EditorInterfaceHeight) --- */
+  --height-compact: 32px;
+  --height-selection: 34px;
+  --height-action: 42px;
+
+  /* --- Spacing (EditorInterfaceSpacing) --- */
+  --inset-inspector: 20px;
+  --gap-section: 20px;
+  --gap-control: 12px;
+  --gap-heading: 8px;
+
+  /* --- Type scale (EditorTypography) --- */
+  --font-ui: "Alibaba PuHuiTi 3", "PingFang SC", "Microsoft YaHei UI",
+    "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", "Consolas", monospace;
+
+  /* --- Product accent colours (theme independent) --- */
+  --amber: #eda647;
+  --success: #5ecc91;
+  --recording: #ff4f4a;
+  --media-accent: #f2f0ea;
+}
+
+/* --------------------------------------------------------------------------
+   Light appearance (Aqua)
+   -------------------------------------------------------------------------- */
+:root,
+[data-theme="light"] {
+  --background-deep: #f3f5f6;
+  --panel-surface: #fafbfb;
+  --panel-raised: #f3f3f3;
+  --card-elevated: #ffffff;
+  --sleeping-monitor: #c9c9c9;
+  --control-well: #e6e6e6;
+
+  --timeline-clip-top: #e0e0e0;
+  --timeline-clip-bottom: #d4d4d4;
+  --timeline-zoom-surface: #dec9a8;
+
+  --platinum-accent: #292929;
+  --platinum-muted: #575757;
+  --on-accent: #fcfcfc;
+
+  --rail-selection-wash: #dbf2e6;
+  --selection-wash: #ebebeb;
+
+  --primary-text: #292929;
+  --secondary-text: #616161;
+
+  --chrome-055: rgba(0, 0, 0, 0.055);
+  --chrome-085: rgba(0, 0, 0, 0.085);
+  --chrome-028: rgba(0, 0, 0, 0.028);
+  --chrome-16: rgba(0, 0, 0, 0.16);
+  --chrome-045: rgba(0, 0, 0, 0.045);
+  --chrome-88: rgba(0, 0, 0, 0.88);
+  --chrome-28: rgba(0, 0, 0, 0.28);
+  --chrome-14: rgba(0, 0, 0, 0.14);
+  --chrome-19: rgba(0, 0, 0, 0.19);
+
+  --hairline: var(--chrome-055);
+  --control-border: var(--chrome-085);
+  --group-surface: var(--chrome-028);
+  --top-highlight: var(--chrome-16);
+  --soft-shadow: rgba(0, 0, 0, 0.07);
+
+  --workspace-grid-dot: rgba(0, 0, 0, 0.19);
+  --popover-secondary-text: #525252;
+
+  color-scheme: light;
+}
+
+/* --------------------------------------------------------------------------
+   Dark appearance
+   -------------------------------------------------------------------------- */
+[data-theme="dark"] {
+  --background-deep: #0b0c0d;
+  --panel-surface: #121314;
+  --panel-raised: #171819;
+  --card-elevated: #1c1d1f;
+  --sleeping-monitor: #3d3d3d;
+  --control-well: #0e0e0e;
+
+  --timeline-clip-top: #383838;
+  --timeline-clip-bottom: #2b2b2b;
+  --timeline-zoom-surface: #786347;
+
+  --platinum-accent: #f2f0ea;
+  --platinum-muted: #b8b5ae;
+  --on-accent: #141414;
+
+  --rail-selection-wash: #243d30;
+  --selection-wash: #333333;
+
+  --primary-text: #e8e8e8;
+  --secondary-text: #b0b0b0;
+
+  --chrome-055: rgba(255, 255, 255, 0.055);
+  --chrome-085: rgba(255, 255, 255, 0.085);
+  --chrome-028: rgba(255, 255, 255, 0.028);
+  --chrome-16: rgba(255, 255, 255, 0.16);
+  --chrome-045: rgba(255, 255, 255, 0.045);
+  --chrome-88: rgba(255, 255, 255, 0.88);
+  --chrome-28: rgba(255, 255, 255, 0.28);
+  --chrome-14: rgba(255, 255, 255, 0.14);
+  --chrome-19: rgba(255, 255, 255, 0.19);
+
+  --hairline: var(--chrome-055);
+  --control-border: var(--chrome-085);
+  --group-surface: var(--chrome-028);
+  --top-highlight: var(--chrome-16);
+  --soft-shadow: rgba(0, 0, 0, 0.22);
+
+  --workspace-grid-dot: rgba(255, 255, 255, 0.16);
+  --popover-secondary-text: #dbdbdb;
+
+  color-scheme: dark;
+}

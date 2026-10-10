@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>DogSC 采集验证</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #0d1b26;
+        font-family: "Alibaba PuHuiTi 3", "Microsoft YaHei UI", sans-serif;
+        color: #f2f0ea;
+      }
+      .stage {
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+      }
+      .orb {
+        width: 120px;
+        height: 120px;
+        border-radius: 50%;
+        background: linear-gradient(140deg, #5ecc91, #2f8fb0 60%, #eda647);
+        animation: roll 2.4s linear infinite;
+      }
+      @keyframes roll {
+        from {
+          transform: translateX(-140px) rotate(0deg);
+        }
+        to {
+          transform: translateX(140px) rotate(720deg);
+        }
+      }
+      .ticker {
+        font-size: 13px;
+        letter-spacing: 0.08em;
+        opacity: 0.8;
+      }
+      .bar {
+        width: 260px;
+        height: 6px;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.14);
+        overflow: hidden;
+      }
+      .bar i {
+        display: block;
+        height: 100%;
+        width: 30%;
+        background: #f2f0ea;
+        animation: sweep 1.6s ease-in-out infinite;
+      }
+      @keyframes sweep {
+        0%,
+        100% {
+          transform: translateX(-100%);
+        }
+        50% {
+          transform: translateX(340%);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      A deliberately animated, always-visible window.
+
+      Window capture in Chromium only delivers frames while the captured window
+      is on screen and repainting, so a static page would look like a failed
+      recording. This page is used by the DOGSC_WINDOW_TEST diagnostic to prove
+      the window-capture path really produces frames.
+    -->
+    <div class="stage">
+      <div class="orb"></div>
+      <div class="ticker" id="ticker">—</div>
+      <div class="bar"><i></i></div>
+    </div>
+    <script>
+      const ticker = document.getElementById("ticker");
+      const started = Date.now();
+      setInterval(() => {
+        ticker.textContent = `${((Date.now() - started) / 1000).toFixed(1)}s`;
+      }, 100);
+    </script>
+  </body>
+</html>
