@@ -96,12 +96,18 @@ export function toast(message, options = {}) {
 
 let openPopover = null;
 
+let openPopoverClose = null;
+
 export function closePopover() {
   if (openPopover) {
     openPopover.remove();
     openPopover = null;
     document.removeEventListener("mousedown", onDocMouseDown, true);
     document.removeEventListener("keydown", onDocKeyDown, true);
+    /* Notify the host (e.g. the recorder bar shrinks its window back). */
+    const done = openPopoverClose;
+    openPopoverClose = null;
+    done?.();
   }
 }
 
@@ -190,6 +196,7 @@ export function showMenu(anchor, items, options = {}) {
   pop.style.top = `${Math.round(top)}px`;
 
   openPopover = pop;
+  openPopoverClose = options.onClose || null;
   setTimeout(() => {
     document.addEventListener("mousedown", onDocMouseDown, true);
     document.addEventListener("keydown", onDocKeyDown, true);

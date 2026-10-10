@@ -23,10 +23,77 @@ import {
 const api = window.dogsc;
 
 const BAR_HEIGHT = 96; // 84px bar + 12px vertical padding
-/* Idle window height: bar (96) + 34px tooltip headroom + 8px bottom padding.
-   Must match SIZES.recorder in windows.js and the root padding in the CSS. */
-const WINDOW_BASE_HEIGHT = 126;
+/* Idle window height: bar (96) + 300px menu headroom + 8px bottom padding.
+   Must match SIZES.recorder in windows.js and the root padding in the CSS.
+   The headroom is click-through, so the extra size is invisible. */
+const WINDOW_BASE_HEIGHT = 392;
 const PANEL_HEIGHTS = { display: 336, window: 420, device: 300, memo: 0 };
+
+/* -------------------------------------------------------------------------
+   Click-through for the transparent headroom. The window never resizes to
+   fit a menu (no flash); instead the empty area forwards nothing to the
+   desktop while interactive regions keep receiving input.
+   ------------------------------------------------------------------------- */
+
+function updateClickThrough(event) {
+  const target = document.elementFromPoint(event.clientX, event.clientY);
+  const interactive = Boolean(target?.closest(".bar, .panel, .popover, .toast"));
+  if (interactive === clickThrough) return; // only IPC on state change
+  clickThrough = interactive;
+  api.windows.setIgnoreMouseEvents(!interactive);
+}
+let clickThrough = true;
+api.windows.setIgnoreMouseEvents(true);
+window.addEventListener("mousemove", updateClickThrough, { passive: true });
+document.documentElement.addEventListener("mouseleave", () => {
+  clickThrough = true;
+  api.windows.setIgnoreMouseEvents(true);
+});
+
+/* -------------------------------------------------------------------------
+   Manual window dragging. The classic `-webkit-app-region: drag` region is
+   unreliable here because the click-through toggling swallows the initial
+   press; programmatic movement keeps dragging deterministic.
+   ------------------------------------------------------------------------- */
+
+const INTERACTIVE = "button, .no-drag, .source-group, .toggles, .save-to, .transport, .panel, .popover, input";
+const bar = document.getElementById("bar");
+let dragState = null;
+
+bar.addEventListener("mousedown", (event) => {
+  if (event.button !== 0) return;
+  if (event.target.closest(INTERACTIVE)) return;
+  event.preventDefault();
+  api.windows.getBounds().then((bounds) => {
+    if (!bounds) return;
+    dragState = {
+      x: event.screenX - bounds.x,
+      y: event.screenY - bounds.y,
+      width: bounds.width, // sent explicitly so no merge can alter the size
+      height: bounds.height,
+    };
+  });
+});
+let dragFrame = 0;
+window.addEventListener("mousemove", (event) => {
+  if (!dragState) return;
+  const state = dragState;
+  const screenX = event.screenX;
+  const screenY = event.screenY;
+  cancelAnimationFrame(dragFrame);
+  dragFrame = requestAnimationFrame(() => {
+    api.windows.setBounds({
+      x: Math.round(screenX - state.x),
+      y: Math.round(screenY - state.y),
+      width: Math.round(state.width),
+      height: Math.round(state.height),
+    });
+  });
+});
+window.addEventListener("mouseup", () => {
+  dragState = null;
+  cancelAnimationFrame(dragFrame);
+});
 
 const SOURCE_KINDS = [
   { value: "display", label: "显示器", icon: "display" },
@@ -117,6 +184,12 @@ async function boot() {
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closePanel();
+  });
+  /* Clicking anywhere outside the bar window (another app, another DogSC
+     window or the desktop) must dismiss the open menu / picker panel. */
+  window.addEventListener("blur", () => {
+    closePopover();
+    closePanel();
   });
 }
 

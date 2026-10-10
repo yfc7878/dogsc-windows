@@ -73,6 +73,7 @@ contextBridge.exposeInMainWorld("dogsc", {
     close: () => invoke("window:close"),
     setBounds: (bounds) => invoke("window:set-bounds", bounds),
     getBounds: () => invoke("window:get-bounds"),
+    setIgnoreMouseEvents: (value) => invoke("window:set-ignore-mouse", value),
     setResizable: (value) => invoke("window:set-resizable", value),
     startDrag: () => invoke("window:start-drag"),
     openEditor: (payload) => invoke("window:open-editor", payload),

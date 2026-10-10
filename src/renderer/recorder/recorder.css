@@ -17,8 +17,9 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  /* Transparent margins: 34px above fits tooltips that flip upward. */
-  padding: 34px 6px 8px;
+  /* 300px transparent headroom above the bar fits the tallest menu with no
+     resize; the area is click-through (see recorder.js). */
+  padding: 300px 6px 8px;
   gap: 6px;
   background: transparent;
 }
@@ -40,7 +41,10 @@ body {
   /* No drop shadow — on a transparent window the clipped shadow read as a
      hard band; the hairline border alone keeps the bar separated. */
   box-shadow: none;
-  -webkit-app-region: drag;
+  /* Dragging is programmatic (recorder.js); app-region drag conflicts with
+     the click-through toggling. */
+  -webkit-app-region: no-drag;
+  cursor: default;
   overflow: hidden;
 }
 
@@ -302,6 +306,13 @@ body {
    Expanding panel (source pickers, device lists)
    -------------------------------------------------------------------------- */
 
+/* Menus and pickers float inside a transparent window — clipped shadows
+   read as hard bands, so surfaces are separated by hairlines only. */
+.popover,
+.panel {
+  box-shadow: none;
+}
+
 .panel {
   flex: 1;
   min-height: 0;
@@ -310,7 +321,6 @@ body {
   border-radius: var(--radius-floating);
   background: var(--panel-surface);
   border: 0.75px solid var(--hairline);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
   overflow: hidden;
   -webkit-app-region: no-drag;
   animation: panelIn 0.18s cubic-bezier(0.32, 0.72, 0.28, 1);

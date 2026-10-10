@@ -352,6 +352,12 @@ function registerIpc() {
     if (win) win.setBounds({ ...win.getBounds(), ...bounds });
   });
   ipcMain.handle("window:get-bounds", (event) => windowOf(event)?.getBounds() || null);
+  /* Click-through control: forward keeps mousemove flowing to the renderer so
+     it can re-enable input when the pointer re-enters an interactive region. */
+  ipcMain.handle("window:set-ignore-mouse", (event, ignore) => {
+    const win = windowOf(event);
+    if (win) win.setIgnoreMouseEvents(Boolean(ignore), { forward: true });
+  });
   ipcMain.handle("window:set-resizable", (event, value) =>
     windowOf(event)?.setResizable(Boolean(value))
   );

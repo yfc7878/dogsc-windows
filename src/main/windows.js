@@ -19,11 +19,11 @@ const PRELOAD = path.join(__dirname, "..", "preload", "preload.js");
 
 /* Geometry taken from the original's authored window sizes. */
 const SIZES = {
-  /* Extra transparent headroom above the bar fits tooltips/popovers that
-     flip upward, and room below lets the bar's soft shadow render fully
-     instead of being clipped by the window edge. */
-  recorder: { width: 772, height: 126 },
-  recorderExpanded: { width: 772, height: 126 },
+  /* The window is permanently tall enough for the tallest menu (保存到 has
+     seven rows). The empty area above the bar is click-through, so the extra
+     size is invisible and menus open without any resize flash. */
+  recorder: { width: 772, height: 392 },
+  recorderExpanded: { width: 772, height: 392 },
   memo: { width: 336, height: 420 },
   editor: { width: 1180, height: 780 },
   exportPanel: { width: 900, height: 664 },
@@ -116,6 +116,17 @@ class WindowManager {
     const size = SIZES.recorder;
     const bounds = this.prefs.get("recorderBounds");
     const area = bounds || defaultRecorderBounds(size);
+    /* The window is tall (transparent menu headroom), so a stale saved y
+       would push the bar under the taskbar. The bar is bottom-anchored:
+       keep its bottom edge 48px above the work area, x as saved. */
+    const display = screen.getDisplayNearestPoint({
+      x: area.x ?? 0,
+      y: area.y ?? 0,
+    });
+    const workBottom = display.workArea.y + display.workArea.height;
+    const maxY = workBottom - 40 - size.height; // bar bottom = workBottom - 48
+    if (area.y === undefined || area.y > maxY) area.y = maxY;
+    else if (area.y < display.workArea.y) area.y = maxY;
     const win = new BrowserWindow(
       this.baseOptions({
         width: size.width,
