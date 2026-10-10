@@ -20,10 +20,11 @@ const PRELOAD = path.join(__dirname, "..", "preload", "preload.js");
 /* Geometry taken from the original's authored window sizes. */
 const SIZES = {
   /* The window is permanently tall enough for the tallest menu (保存到 has
-     seven rows). The empty area above the bar is click-through, so the extra
-     size is invisible and menus open without any resize flash. */
-  recorder: { width: 772, height: 392 },
-  recorderExpanded: { width: 772, height: 392 },
+     seven rows: 300px) and for the tallest picker panel (another 300px).
+     The empty area above the bar is click-through, so the extra size is
+     invisible and pickers open with no resize — no flash. */
+  recorder: { width: 812, height: 698 },
+  recorderExpanded: { width: 812, height: 698 },
   memo: { width: 336, height: 420 },
   editor: { width: 1180, height: 780 },
   exportPanel: { width: 900, height: 664 },
@@ -114,6 +115,10 @@ class WindowManager {
       return existing;
     }
     const size = SIZES.recorder;
+    /* Never taller than the display can show: the bar is bottom-anchored, so
+       clipping only ever affects the transparent headroom above it. */
+    const workHeight = screen.getPrimaryDisplay().workArea.height;
+    const height = Math.min(size.height, Math.max(320, workHeight - 48));
     const bounds = this.prefs.get("recorderBounds");
     const area = bounds || defaultRecorderBounds(size);
     /* The window is tall (transparent menu headroom), so a stale saved y
@@ -124,13 +129,13 @@ class WindowManager {
       y: area.y ?? 0,
     });
     const workBottom = display.workArea.y + display.workArea.height;
-    const maxY = workBottom - 40 - size.height; // bar bottom = workBottom - 48
+    const maxY = workBottom - 40 - height; // bar bottom = workBottom - 48
     if (area.y === undefined || area.y > maxY) area.y = maxY;
     else if (area.y < display.workArea.y) area.y = maxY;
     const win = new BrowserWindow(
       this.baseOptions({
         width: size.width,
-        height: size.height,
+        height,
         x: area.x,
         y: area.y,
         /* An opaque backgroundColor would defeat `transparent: true` and paint

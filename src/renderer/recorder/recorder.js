@@ -26,8 +26,9 @@ const BAR_HEIGHT = 96; // 84px bar + 12px vertical padding
 /* Idle window height: bar (96) + 300px menu headroom + 8px bottom padding.
    Must match SIZES.recorder in windows.js and the root padding in the CSS.
    The headroom is click-through, so the extra size is invisible. */
-const WINDOW_BASE_HEIGHT = 392;
-const PANEL_HEIGHTS = { display: 336, window: 420, device: 300, memo: 0 };
+const WINDOW_BASE_HEIGHT = 698;
+/* Panels fit in the permanent headroom; the window never resizes. */
+const PANEL_HEIGHTS = { display: 300, window: 300, device: 300, memo: 0 };
 
 /* -------------------------------------------------------------------------
    Click-through for the transparent headroom. The window never resizes to
@@ -104,7 +105,9 @@ const SOURCE_KINDS = [
 
 const state = {
   config: {
-    kind: "display",
+    /* No source kind is pre-selected: the user picks 显示器/窗口/区域/设备
+       explicitly, so the highlighted button never misleads. */
+    kind: null,
     sourceId: null,
     sourceName: "",
     displayId: null,
@@ -165,6 +168,7 @@ async function boot() {
     state.status = payload.status;
     state.elapsed = payload.elapsed || 0;
     state.markers = payload.markers || 0;
+    lastStateAt = Date.now();
     if (payload.status === "idle") closePanel();
     render();
   });
@@ -249,6 +253,12 @@ function buildBar() {
   attachTooltip(stop, t("停止"));
   stop.addEventListener("click", () => stopRecording(false));
 
+  const record = document.getElementById("btn-record");
+  attachTooltip(record, t("开始录制"));
+  record.addEventListener("click", () => {
+    if (state.status === "idle") startRecording();
+  });
+
   const marker = document.getElementById("btn-marker");
   marker.innerHTML = icon("marker", 17);
   attachTooltip(marker, t("添加录制标记（⌃⌥M）；保存到项目，不会录入画面"));
@@ -319,6 +329,7 @@ function render() {
 
   const transport = document.getElementById("transport");
   transport.hidden = !recording;
+  document.getElementById("btn-record").hidden = recording;
   document.getElementById("source-group").style.display = recording ? "none" : "";
   document.querySelectorAll(".bar > .divider")[0].style.display = recording ? "none" : "";
 
@@ -339,20 +350,23 @@ function render() {
 async function refreshSources({ thumbnails = false } = {}) {
   state.displays = await api.capture.displays();
   state.sources = await api.capture.sources({ thumbnails });
+  /* Electron can leave display_id empty for screen sources on Windows; align
+     them with displays by order so thumbnails and selection keep working. */
+  const screens = state.sources.filter((source) => source.type === "screen");
+  screens.forEach((source, index) => {
+    if (!source.displayId && state.displays[index]) {
+      source.displayId = String(state.displays[index].id);
+    }
+  });
 }
 
 async function pickDefaultSource() {
   if (!state.displays.length) return;
+  /* Remember the primary display for the area picker, but do NOT auto-select
+     a source: recording only starts after the user picks one explicitly. */
   const primary = state.displays.find((display) => display.primary) || state.displays[0];
   state.config.displayId = primary.id;
   state.config.scaleFactor = primary.scaleFactor;
-  const source = state.sources.find(
-    (candidate) => candidate.type === "screen" && String(candidate.displayId) === String(primary.id)
-  );
-  if (source) {
-    state.config.sourceId = source.id;
-    state.config.sourceName = source.name;
-  }
 }
 
 /**
@@ -384,7 +398,54 @@ async function ensureDevices() {
   }
 }
 
+/** Does the currently stored source id still point at `type`? */
+function currentSourceIs(type) {
+  return Boolean(state.sources.find((s) => s.id === state.config.sourceId && s.type === type));
+}
+
+/**
+ * Switching source mode drops any selection belonging to another mode, so the
+ * highlighted card / row always matches what will actually be recorded.
+ */
+function clearSelectionFor(kind) {
+  const config = state.config;
+  if (kind === "device") {
+    config.sourceId = null;
+    config.sourceName = "";
+    config.region = null;
+    return;
+  }
+  config.deviceId = null;
+  if (kind === "display" || kind === "area") {
+    if (!currentSourceIs("screen")) {
+      config.sourceId = null;
+      config.sourceName = "";
+    }
+    if (kind === "area") config.region = null;
+  } else if (kind === "window") {
+    if (!currentSourceIs("window")) {
+      config.sourceId = null;
+      config.sourceName = "";
+    }
+    config.region = null;
+  }
+}
+
+/* Resolves and stores the capturer source for a display. */
+function selectDisplay(display) {
+  state.config.displayId = display.id;
+  state.config.scaleFactor = display.scaleFactor;
+  const match = state.sources.find(
+    (candidate) => candidate.type === "screen" && String(candidate.displayId) === String(display.id)
+  );
+  if (match) {
+    state.config.sourceId = match.id;
+    state.config.sourceName = match.name;
+  }
+}
+
 function selectSourceKind(kind) {
+  if (kind !== state.config.kind) clearSelectionFor(kind);
   state.config.kind = kind;
   if (kind === "area") {
     openPanel("display", { title: t("选择录制范围"), mode: "area" });
@@ -404,8 +465,10 @@ async function openPanel(kind, options = {}) {
   const panel = document.getElementById("panel");
   const body = document.getElementById("panel-body");
   state.activePanel = kind;
-  /* Thumbnails are pulled only while a picker is on screen. */
-  await refreshSources({ thumbnails: true });
+  /* Thumbnails are pulled only while a picker is on screen. Prefs are
+     refreshed too: the area selector stores the last region there. */
+  const [prefs] = await Promise.all([api.prefs.all(), refreshSources({ thumbnails: true })]);
+  state.prefs = prefs;
 
   body.innerHTML = "";
   const title = document.createElement("div");
@@ -432,8 +495,9 @@ async function openPanel(kind, options = {}) {
     renderDevicePanel(body, options);
   }
 
+  /* The window already has room for the panel (see SIZES.recorder), so the
+     panel is simply revealed — resizing a transparent window flashes. */
   panel.hidden = false;
-  await resizeForPanel(PANEL_HEIGHTS[kind] || 320);
 }
 
 function closePanel() {
@@ -441,16 +505,12 @@ function closePanel() {
   if (panel.hidden) return;
   panel.hidden = true;
   state.activePanel = null;
-  resizeForPanel(0);
 }
 
-async function resizeForPanel(panelHeight) {
-  const bounds = await api.windows.getBounds();
-  if (!bounds) return;
-  const height = WINDOW_BASE_HEIGHT + panelHeight;
-  if (bounds.height === height) return;
-  const delta = height - bounds.height;
-  await api.windows.setBounds({ height, y: bounds.y - delta });
+function resizeForPanel(panelHeight) {
+  /* Kept for callers that still expect it; the window no longer needs to
+     resize because its height already covers the tallest panel. */
+  return Promise.resolve();
 }
 
 function renderDisplayPanel(host, options) {
@@ -461,7 +521,11 @@ function renderDisplayPanel(host, options) {
     const source = state.sources.find(
       (candidate) => candidate.type === "screen" && String(candidate.displayId) === String(display.id)
     );
-    const selected = String(state.config.displayId) === String(display.id);
+    /* Highlighted only once the user actually picked this display, so the
+       panel never looks pre-selected on launch. */
+    const selected = source
+      ? state.config.sourceId === source.id
+      : String(state.config.displayId) === String(display.id);
     const card = document.createElement("div");
     card.className = "source-card";
     if (selected) card.classList.add("is-selected");
@@ -520,34 +584,21 @@ function renderDisplayPanel(host, options) {
         return;
       }
       if (selected) {
+        /* The display may be selected without a resolved source (primary
+           display on launch), so resolve it before starting. */
+        selectDisplay(display);
         closePanel();
         await startRecording();
         return;
       }
-      state.config.displayId = display.id;
-      state.config.scaleFactor = display.scaleFactor;
-      const match = state.sources.find(
-        (candidate) => candidate.type === "screen" && String(candidate.displayId) === String(display.id)
-      );
-      if (match) {
-        state.config.sourceId = match.id;
-        state.config.sourceName = match.name;
-      }
+      selectDisplay(display);
       render();
       openPanel("display", options);
     });
     card.appendChild(action);
 
     card.addEventListener("click", () => {
-      state.config.displayId = display.id;
-      state.config.scaleFactor = display.scaleFactor;
-      const match = state.sources.find(
-        (candidate) => candidate.type === "screen" && String(candidate.displayId) === String(display.id)
-      );
-      if (match) {
-        state.config.sourceId = match.id;
-        state.config.sourceName = match.name;
-      }
+      selectDisplay(display);
       render();
       openPanel("display", options);
     });
@@ -593,7 +644,7 @@ function renderWindowPanel(host) {
   if (!windows.length) {
     const empty = document.createElement("div");
     empty.className = "empty-state";
-    empty.textContent = t("未发现设备");
+    empty.textContent = t("未发现可录制的窗口");
     host.appendChild(empty);
     return;
   }
@@ -615,6 +666,9 @@ function renderWindowPanel(host) {
       ${state.config.sourceId === source.id ? icon("check", 15) : ""}
     `;
     row.addEventListener("click", () => {
+      state.config.kind = "window";
+      state.config.deviceId = null;
+      state.config.region = null;
       state.config.sourceId = source.id;
       state.config.sourceName = source.name;
       state.config.displayId = source.displayId || state.config.displayId;
@@ -658,8 +712,11 @@ function renderDevicePanel(host) {
       ${state.config.deviceId === device.deviceId ? icon("check", 15) : ""}
     `;
     row.addEventListener("click", () => {
-      state.config.deviceId = device.deviceId;
       state.config.kind = "device";
+      state.config.region = null;
+      state.config.sourceId = null;
+      state.config.sourceName = "";
+      state.config.deviceId = device.deviceId;
       render();
       openPanel("device", { title: t("设备"), mode: "device" });
     });
@@ -886,16 +943,28 @@ async function changeLocation() {
 /* Transport                                                                 */
 /* ------------------------------------------------------------------------- */
 
-async function startRecording() {
-  const needsSource =
-    state.config.kind === "device"
-      ? !state.config.deviceId
-      : state.config.kind === "area"
-        ? !state.config.region
-        : !state.config.sourceId;
+/** What is still missing before the chosen mode can be recorded. */
+function missingSourceReason() {
+  const config = state.config;
+  switch (config.kind) {
+    case "device":
+      return config.deviceId ? null : t("请先选择一个录制设备。");
+    case "area":
+      return config.region ? null : t("请先框选录制区域。");
+    case "window":
+      return config.sourceId ? null : t("请先选择一个窗口。");
+    case "display":
+      /* The main process can resolve a screen source from the display id. */
+      return config.sourceId || config.displayId ? null : t("请先选择一个显示器。");
+    default:
+      return t("请先选择显示器、窗口、区域或设备。");
+  }
+}
 
-  if (needsSource) {
-    toast(t("请先选择显示器、窗口、区域或设备。"), { icon: "info" });
+async function startRecording() {
+  const reason = missingSourceReason();
+  if (reason) {
+    toast(reason, { icon: "info" });
     if (state.config.kind === "area") selectSourceKind("area");
     return;
   }
@@ -947,14 +1016,9 @@ async function stopRecording(cancel) {
   }
 }
 
-/**
- * The bar's primary action: idle → start, recording → stop. Bound to a click
- * on the bar background the way the original binds its record control.
- */
-document.getElementById("bar").addEventListener("dblclick", (event) => {
-  if (event.target.closest("button")) return;
-  if (state.status === "idle") startRecording();
-});
+/* Recording starts from the explicit record button, the spacebar shortcut or
+   the picker panels' 开始录制 action — never from an accidental double-click
+   on the bar while repositioning it. */
 
 /* A dedicated record affordance: click the selected source again. */
 document.addEventListener("keydown", async (event) => {
@@ -976,4 +1040,17 @@ function escapeHtml(value) {
   });
 }
 
+let lastStateAt = Date.now();
+
 boot();
+
+/* The main process pushes state only on transitions (start/pause/marker…),
+   so the timecode is advanced here. requestAnimationFrame keeps it smooth
+   (a timer interval visibly stutters at tenth-of-a-second precision). */
+(function tickTimecode() {
+  requestAnimationFrame(tickTimecode);
+  if (state.status !== "recording") return;
+  const elapsed = state.elapsed + (Date.now() - lastStateAt) / 1000;
+  const time = document.getElementById("rec-time");
+  if (time) time.textContent = formatTimecode(elapsed);
+})();

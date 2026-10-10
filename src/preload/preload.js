@@ -95,7 +95,7 @@ contextBridge.exposeInMainWorld("dogsc", {
   },
   capture: {
     displays: () => invoke("capture:displays"),
-    sources: () => invoke("capture:sources"),
+    sources: (options) => invoke("capture:sources", options),
     start: (config) => invoke("capture:start", config),
     pause: () => invoke("capture:pause"),
     resume: () => invoke("capture:resume"),

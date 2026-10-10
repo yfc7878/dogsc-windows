@@ -17,8 +17,8 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  /* 300px transparent headroom above the bar fits the tallest menu with no
-     resize; the area is click-through (see recorder.js). */
+  /* 300px transparent menu headroom + 300px picker area above the bar, both
+     click-through; the window never resizes, so nothing ever flashes. */
   padding: 300px 6px 8px;
   gap: 6px;
   background: transparent;
@@ -243,6 +243,41 @@ body {
   width: 15px;
   height: 15px;
   color: var(--secondary-text);
+}
+
+/* --------------------------------------------------------------------------
+   Record button — the bar's primary action
+   -------------------------------------------------------------------------- */
+
+.record-btn {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  flex: none;
+  border-radius: 50%;
+  border: 0.75px solid var(--control-border);
+  background: var(--recording);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  transition: filter 0.14s ease, transform 0.12s ease;
+}
+.record-btn::after {
+  content: "";
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #fff;
+}
+.record-btn:hover {
+  filter: brightness(1.08);
+}
+.record-btn:active {
+  transform: scale(0.95);
+}
+.record-btn[hidden] {
+  display: none !important;
 }
 
 /* --------------------------------------------------------------------------
