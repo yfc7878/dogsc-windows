@@ -1273,6 +1273,89 @@ export function clicksAround(document, time) {
   );
 }
 
+/**
+ * Canvas anchor for one normalized recorded-frame point (pointer or click).
+ *
+ * The pointer track is normalized against the FULL recorded frame while the
+ * card renders the CROPPED region, so the sample is re-based through the crop
+ * before anything else — without this a crop shifts every cursor event by the
+ * cut-away margin. On a 3D card the point then goes through the exact same
+ * homography as the screen content: the flat linear map used to leave the
+ * enlarged cursor floating beside the tilted surface. The returned `scale` is
+ * the projection's local foreshortening, keeping the sprite proportional to
+ * the picture; a flat card applies its Z rotation around the card centre,
+ * matching drawScreenContent.
+ */
+export function cursorAnchor(document, rect, nx, ny) {
+  /* The card shows the recorded frame's [crop.x, crop.x + crop.width] span
+     across its width, so a recorded-frame fraction maps to card space by the
+     INVERSE of that span — subtract the origin, divide by the span, then
+     clamp: a pointer outside the visible region sticks to the card edge. */
+  const crop = document.canvas.crop || { x: 0, y: 0, width: 1, height: 1 };
+  const u = Math.min(Math.max((nx - crop.x) / Math.max(crop.width, 0.0001), 0), 1);
+  const v = Math.min(Math.max((ny - crop.y) / Math.max(crop.height, 0.0001), 0), 1);
+
+  const quad = screenQuadFor(rect);
+  if (quad) {
+    const map = unitSquareHomography(quad);
+    if (map) {
+      const point = map(u, v);
+      if (point) {
+        return {
+          x: point.x,
+          y: point.y,
+          scale: projectedLocalScale(map, u, v, rect),
+        };
+      }
+    }
+  }
+
+  let x = rect.x + u * rect.width;
+  let y = rect.y + v * rect.height;
+  if (rect.rotation) {
+    const radians = (rect.rotation * Math.PI) / 180;
+    const cos = Math.cos(radians);
+    const sin = Math.sin(radians);
+    const dx = x - rect.centerX;
+    const dy = y - rect.centerY;
+    x = rect.centerX + dx * cos - dy * sin;
+    y = rect.centerY + dx * sin + dy * cos;
+  }
+  return { x, y, scale: 1 };
+}
+
+/**
+ * Canvas distance per flat card distance at one point of the projected quad
+ * (averaged over both axes), clamped to a sane band. This is what makes the
+ * cursor shrink on the far side of a tilted card instead of floating at full
+ * 2D size.
+ */
+function projectedLocalScale(map, u, v, rect) {
+  const eps = 0.01;
+  const uLow = Math.max(0, u - eps);
+  const uHigh = Math.min(1, u + eps);
+  const vLow = Math.max(0, v - eps);
+  const vHigh = Math.min(1, v + eps);
+  const left = map(uLow, v);
+  const right = map(uHigh, v);
+  const top = map(u, vLow);
+  const bottom = map(u, vHigh);
+  let scaleU = 0;
+  let scaleV = 0;
+  if (left && right && uHigh > uLow) {
+    scaleU =
+      Math.hypot(right.x - left.x, right.y - left.y) /
+      ((uHigh - uLow) * Math.max(rect.width, 1));
+  }
+  if (top && bottom && vHigh > vLow) {
+    scaleV =
+      Math.hypot(bottom.x - top.x, bottom.y - top.y) /
+      ((vHigh - vLow) * Math.max(rect.height, 1));
+  }
+  const scale = scaleU && scaleV ? (scaleU + scaleV) / 2 : scaleU || scaleV || 1;
+  return Math.min(Math.max(scale, 0.35), 2.5);
+}
+
 function drawCursor(ctx, document, time, width, height, screenRect) {
   const style = document.cursorStyle;
   if (style.assetID === "system.hidden") return;
@@ -1280,10 +1363,10 @@ function drawCursor(ctx, document, time, width, height, screenRect) {
   const point = pointerAt(document, time);
   if (!point) return;
 
-  /* The pointer track is normalised against the recorded frame; map it into
-     the on-canvas screen rectangle so it follows crop, zoom and 3D. */
-  const x = screenRect.x + point.x * screenRect.width;
-  const y = screenRect.y + point.y * screenRect.height;
+  /* Crop-aware, 3D-aware mapping for the pointer and every click effect. */
+  const anchor = cursorAnchor(document, screenRect, point.x, point.y);
+  const x = anchor.x;
+  const y = anchor.y;
 
   if (style.hideWhenIdle) {
     const samples = document.pointerTrack?.samples || [];
@@ -1293,7 +1376,7 @@ function drawCursor(ctx, document, time, width, height, screenRect) {
     if (idleFor > style.idleDelay) return;
   }
 
-  const size = Math.max(10, height * 0.028 * style.size);
+  const baseSize = Math.max(10, height * 0.028 * style.size);
 
   /* Click feedback is drawn beneath the pointer body. */
   for (const click of clicksAround(document, time)) {
@@ -1301,8 +1384,10 @@ function drawCursor(ctx, document, time, width, height, screenRect) {
     const effect = style.clickEffectStyle;
     const definition = CLICK_EFFECT_DURATION[effect] || 0.36;
     const progress = Math.max(0, Math.min(1, local / definition));
-    const cx = screenRect.x + click.x * screenRect.width;
-    const cy = screenRect.y + click.y * screenRect.height;
+    const clickAnchor = cursorAnchor(document, screenRect, click.x, click.y);
+    const cx = clickAnchor.x;
+    const cy = clickAnchor.y;
+    const size = baseSize * clickAnchor.scale;
     const color = style.clickColor || "#F2F0EA";
     ctx.save();
     ctx.globalAlpha = (1 - progress) * style.clickOpacity;
@@ -1345,6 +1430,10 @@ function drawCursor(ctx, document, time, width, height, screenRect) {
     }
     ctx.restore();
   }
+
+  /* The sprite itself follows the projection's local foreshortening, so on a
+     tilted card the enlarged cursor keeps the picture's proportions. */
+  const size = baseSize * anchor.scale;
 
   ctx.save();
   ctx.translate(x, y);

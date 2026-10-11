@@ -808,10 +808,22 @@ function finishSuccess(result) {
   state.exporting = false;
   setBusy(false);
   setProgress("done", 1);
-  document.getElementById("btn-start").textContent = t("在文件夹中显示");
-  document.getElementById("btn-start").onclick = () => api.exporter.reveal(result.outputPath);
-  document.getElementById("btn-cancel").textContent = t("关闭");
-  document.getElementById("btn-cancel").onclick = () => window.close();
+  /* Both buttons got their original handlers via addEventListener at boot, so
+     a bare `.onclick =` override cannot retire them — clicking "在文件夹中
+     显示" used to REVEAL the file and also run the entire export again. Swap
+     the listeners explicitly instead. */
+  const startButton = document.getElementById("btn-start");
+  const reveal = () => api.exporter.reveal(result.outputPath);
+  startButton.removeEventListener("click", start);
+  startButton.removeEventListener("click", reveal);
+  startButton.addEventListener("click", reveal);
+  startButton.textContent = t("在文件夹中显示");
+  const cancelButton = document.getElementById("btn-cancel");
+  const close = () => window.close();
+  cancelButton.removeEventListener("click", cancel);
+  cancelButton.removeEventListener("click", close);
+  cancelButton.addEventListener("click", close);
+  cancelButton.textContent = t("关闭");
   document.getElementById("estimate").textContent = `${t("导出完成")} · ${formatBytes(result.size || 0)}`;
   toast(`${t("导出完成")} · ${result.outputPath}`, { icon: "check", duration: 4200 });
 }

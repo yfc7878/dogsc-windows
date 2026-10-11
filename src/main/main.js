@@ -165,6 +165,8 @@ let exportJob = null;
 let pendingStart = null;
 /** Destination preference saved by a click-through export run, restored after. */
 let previousExportLocation;
+/** Reveal calls observed in smoke mode (export:reveal skips the shell there). */
+let smokeRevealCount = 0;
 
 /** Called by the capture surface once it knows whether the stream started. */
 function settleStart(result) {
@@ -764,7 +766,16 @@ function registerIpc() {
       return { ok: false, reason: "failed", message: error?.message };
     }
   });
+  /* Counted by the smoke suite's reveal-button regression (it must observe
+     the reveal without an Explorer window stealing focus mid-run). The
+     counter lives at module scope so the smoke probes can read it. */
   ipcMain.handle("export:reveal", (_e, target) => {
+    /* Logged so a smoke run can tell a real reveal apart from a silent no-op. */
+    console.log(`[exporter] reveal ${target}`);
+    if (process.env.DOGSC_SMOKE) {
+      smokeRevealCount += 1;
+      return;
+    }
     if (target) shell.showItemInFolder(target);
   });
 
@@ -1496,6 +1507,49 @@ async function runTopbarExportProbe(editor, outputDir) {
   } else {
     console.log("[topbar-export] FULL-RUN PASS");
   }
+
+  /* Regression for the reveal button: after a finished export the primary
+     button becomes 在文件夹中显示, but its old start-handler used to survive
+     as a second click listener — clicking it revealed the file AND ran the
+     whole export again. The renderer cannot stub the contextBridge object
+     (every access returns a fresh proxy), so the click is observed from the
+     UI state plus the main process's `[exporter] reveal` log line, while the
+     artifact fingerprint proves no re-render happened. */
+  const sizeBefore = (await fsp.stat(target)).size;
+  const mtimeBefore = (await fsp.stat(target)).mtimeMs;
+  const revealsBefore = smokeRevealCount;
+  const revealCheck = await panel.webContents
+    .executeJavaScript(
+      `(async () => {
+         const button = document.getElementById("btn-start");
+         if (!button || button.textContent.indexOf("文件夹") < 0) {
+           return { error: "button not in reveal state: " + (button?.textContent ?? "null") };
+         }
+         button.click();
+         await new Promise((resolve) => setTimeout(resolve, 2500));
+         return {
+           label: button.textContent,
+           status: document.getElementById("estimate")?.textContent ?? "",
+           busy: button.disabled,
+         };
+       })()`
+    )
+    .catch((error) => ({ error: String(error) }));
+  console.log("[topbar-export] reveal-check:", JSON.stringify(revealCheck));
+  const statAfter = fs.existsSync(target) ? await fsp.stat(target) : null;
+  const revealStable =
+    statAfter && statAfter.size === sizeBefore && statAfter.mtimeMs === mtimeBefore;
+  const revealOk =
+    revealCheck &&
+    !revealCheck.error &&
+    smokeRevealCount === revealsBefore + 1 &&
+    revealCheck.label === "在文件夹中显示" &&
+    String(revealCheck.status || "").includes("导出完成") &&
+    !revealCheck.busy &&
+    revealStable;
+  console.log(
+    `[topbar-export] reveal-check ${revealOk ? "PASS" : "FAIL"}${revealStable ? "" : " (artifact was re-rendered!)"}`
+  );
 }
 
 /**
