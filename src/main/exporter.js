@@ -203,6 +203,17 @@ async function renderAudio(document, tracks, outputWav, { signal } = {}) {
 /* ------------------------------------------------------------------------- */
 
 /**
+ * Chromium's H.264 encoder produces BT.709 video, but a raw Annex B stream
+ * carries no colour description and `-c:v copy` keeps it that way — players
+ * then guess (often BT.601) and the picture comes out shifted. Tag the
+ * bitstream explicitly, the same way the original's export pipeline does.
+ */
+const H264_COLOR_TAGS = [
+  "-bsf:v",
+  "h264_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1:video_full_range_flag=0",
+];
+
+/**
  * Wraps a WebCodecs bitstream into a silent MP4.
  * H.264 (Annex B) is copied straight through; VP9 / AV1 are transcoded.
  */
@@ -237,6 +248,7 @@ async function wrapVideo({ codec, bitstreamPath, outputPath, fps, duration, sign
       "yuv420p"
     );
   }
+  args.push(...H264_COLOR_TAGS);
   args.push("-movflags", "+faststart", "-an", "-y", outputPath);
 
   await runFfmpeg(args, { signal, duration, onProgress });
@@ -285,6 +297,7 @@ async function encodeImageSequence({ framesDir, pattern, fps, outputPath, signal
     "18",
     "-pix_fmt",
     "yuv420p",
+    ...H264_COLOR_TAGS,
     "-movflags",
     "+faststart",
     "-y",

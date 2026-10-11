@@ -17,6 +17,7 @@
  */
 
 import { rid, timelineDuration } from "./model.js";
+import { eventsFor } from "./pointer-smooth.js";
 
 const clamp = (value, minimum, maximum) => Math.min(Math.max(value, minimum), maximum);
 
@@ -35,47 +36,7 @@ const START_SPACING = 0.16;
 const FOLLOW_INTERVAL = 1 / 120;
 const REST_AREA_RATIO = 0.22;
 
-/* ------------------------------------------------------------------------- */
-/* 指针事件                                                                   */
-/* ------------------------------------------------------------------------- */
-
 const isClick = (event) => event.kind === "leftClick" || event.kind === "rightClick";
-
-/**
- * 把项目的 pointerTrack 整理成统一事件列表 { time, x, y, kind }。
- * 采样是移动，点击按键区分左右；滚轮按移动计入（活动判定用），不参与规划。
- */
-export function pointerEventsFrom(document) {
-  const track = document.pointerTrack;
-  if (!track) return [];
-  const events = [];
-  for (const sample of track.samples || []) {
-    if (Number.isFinite(sample.t) && Number.isFinite(sample.x) && Number.isFinite(sample.y)) {
-      events.push({ time: sample.t, x: sample.x, y: sample.y, kind: "move" });
-    }
-  }
-  for (const click of track.clicks || []) {
-    if (!Number.isFinite(click.t) || !Number.isFinite(click.x) || !Number.isFinite(click.y)) continue;
-    const kind =
-      click.button === "left" ? "leftClick" : click.button === "right" ? "rightClick" : "move";
-    events.push({ time: click.t, x: click.x, y: click.y, kind });
-  }
-  events.sort((a, b) => a.time - b.time);
-  return events;
-}
-
-/* 事件列表按文档缓存；pointerTrack 在录制后不变，用长度做版本标记即可。 */
-const eventCache = new WeakMap();
-
-function eventsFor(document) {
-  const track = document.pointerTrack || {};
-  const version = `${track.samples?.length || 0}:${track.clicks?.length || 0}`;
-  const hit = eventCache.get(document);
-  if (hit && hit.version === version) return hit.events;
-  const events = pointerEventsFrom(document);
-  eventCache.set(document, { version, events });
-  return events;
-}
 
 /* ------------------------------------------------------------------------- */
 /* 规划                                                                       */

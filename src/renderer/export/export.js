@@ -636,7 +636,32 @@ async function pickCodec(size, fps) {
  * emit nothing (a flaky hardware encoder, or a GPU under contention). That used
  * to be invisible here and only surfaced much later as an ffmpeg failure on an
  * empty bitstream, so the pass measures itself instead.
+ *
+ * A watchdog mirrors the original's ExportActivityWatchdog: a hardware encoder
+ * that stops draining its queue (or never finishes flushing) can hang the loop
+ * forever — after 20 seconds of silence the pass aborts with a `stalled` error
+ * so `runFrameLoop` can retry on the software path instead of freezing.
  */
+const STALL_TIMEOUT = 20000;
+
+function stallError(message) {
+  return Object.assign(new Error(message), { stalled: true });
+}
+
+function guard(promise, label) {
+  let timer = null;
+  promise.catch(() => {});
+  return Promise.race([
+    promise,
+    new Promise((resolve, reject) => {
+      timer = setTimeout(
+        () => reject(stallError(`${label}超过 ${STALL_TIMEOUT / 1000} 秒没有响应`)),
+        STALL_TIMEOUT
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 async function encodeBitstreamPass({ size, duration, codec, hardwareAcceleration, sources }) {
   const canvas = document.createElement("canvas");
   canvas.width = size.width;
@@ -681,47 +706,61 @@ async function encodeBitstreamPass({ size, duration, codec, hardwareAcceleration
   });
   state.encoder = encoder;
 
-  for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
-    if (state.cancelled) break;
-    const time = frameIndex / state.fps;
+  try {
+    for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
+      if (state.cancelled) break;
+      const time = frameIndex / state.fps;
 
-    await seekAll(time);
-    renderFrame(ctx, state.document, time, { width: size.width, height: size.height, sources });
+      await seekAll(time);
+      renderFrame(ctx, state.document, time, { width: size.width, height: size.height, sources });
 
-    const frame = new VideoFrame(canvas, {
-      timestamp: Math.round((frameIndex / state.fps) * 1e6),
-      duration: Math.round(1e6 / state.fps),
-    });
-    encoder.encode(frame, { keyFrame: frameIndex % (state.fps * 2) === 0 });
-    frame.close();
-    frames += 1;
+      const frame = new VideoFrame(canvas, {
+        timestamp: Math.round((frameIndex / state.fps) * 1e6),
+        duration: Math.round(1e6 / state.fps),
+      });
+      encoder.encode(frame, { keyFrame: frameIndex % (state.fps * 2) === 0 });
+      frame.close();
+      frames += 1;
 
-    /* Keep the encoder queue shallow so memory stays bounded. */
-    while (encoder.encodeQueueSize > 12 && !state.cancelled) {
-      await new Promise((resolve) => setTimeout(resolve, 4));
+      /* Keep the encoder queue shallow so memory stays bounded. A queue that
+         never drains means the encoder stopped responding; without the
+         watchdog this loop would spin forever and the progress bar would
+         hang with no way out. */
+      const waitingSince = performance.now();
+      while (encoder.encodeQueueSize > 12 && !state.cancelled) {
+        if (performance.now() - waitingSince > STALL_TIMEOUT) {
+          throw stallError("视频编码器超过 20 秒没有响应");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 4));
+        await Promise.all(pending.splice(0));
+      }
+
+      if (frameIndex % 5 === 0 || frameIndex === totalFrames - 1) {
+        setProgress("encoding", (frameIndex + 1) / totalFrames);
+      }
+    }
+
+    await Promise.all(pending.splice(0));
+    if (!state.cancelled) {
+      try {
+        await guard(encoder.flush(), "视频编码器收尾");
+      } catch (error) {
+        /* A true flush failure keeps the old behaviour (recorded, then the
+           empty-bitstream check retries); only a watchdog stall propagates so
+           the retry happens right away. */
+        if (error?.stalled) throw error;
+        encoderError = encoderError || String(error?.message || error);
+      }
       await Promise.all(pending.splice(0));
     }
-
-    if (frameIndex % 5 === 0 || frameIndex === totalFrames - 1) {
-      setProgress("encoding", (frameIndex + 1) / totalFrames);
-    }
-  }
-
-  await Promise.all(pending.splice(0));
-  if (!state.cancelled) {
+  } finally {
     try {
-      await encoder.flush();
-    } catch (error) {
-      encoderError = encoderError || String(error?.message || error);
+      encoder.close();
+    } catch {
+      /* already closed */
     }
-    await Promise.all(pending.splice(0));
+    state.encoder = null;
   }
-  try {
-    encoder.close();
-  } catch {
-    /* already closed */
-  }
-  state.encoder = null;
   return { frames, bytes, error: encoderError };
 }
 
@@ -760,20 +799,33 @@ async function runFrameLoop({ size, duration, codec }) {
     return;
   }
 
-  let pass = await encodeBitstreamPass({
-    size,
-    duration,
-    codec,
-    hardwareAcceleration: "no-preference",
-    sources,
-  });
+  let pass = null;
+  let stalled = null;
+  try {
+    pass = await encodeBitstreamPass({
+      size,
+      duration,
+      codec,
+      hardwareAcceleration: "no-preference",
+      sources,
+    });
+  } catch (error) {
+    /* A stalled hardware encoder is retried on the software path below;
+       anything else (or a cancellation) is a real failure. */
+    if (!error?.stalled || state.cancelled) throw error;
+    stalled = error;
+  }
 
-  if (!state.cancelled && pass.frames > 0 && pass.bytes === 0) {
-    /* A hardware encoder can accept frames and emit nothing. Retrying on the
-       software encoder turns that into a finished export instead of an empty
-       bitstream and an incomprehensible ffmpeg failure. */
-    console.warn("[export] the encoder produced no data; retrying with the software encoder");
-    setProgress("encoding", 0);
+  if (!state.cancelled && (stalled || (pass.frames > 0 && pass.bytes === 0))) {
+    /* A hardware encoder can stop responding or accept frames and emit
+       nothing. Retrying on the software encoder turns that into a finished
+       export instead of a hung progress bar or an empty bitstream and an
+       incomprehensible ffmpeg failure. */
+    console.warn(
+      "[export] retrying with the software encoder:",
+      stalled ? stalled.message : "the encoder produced no data"
+    );
+    setProgress("retry", 0);
     pass = await encodeBitstreamPass({
       size,
       duration,
@@ -842,6 +894,7 @@ const STAGE_LABELS = {
   preparing: "正在准备素材",
   audio: "正在处理音频",
   encoding: "正在合成与编码",
+  retry: "硬件编码没有响应，正在改用软件编码重试",
   muxing: "正在完成文件",
   cancelling: "正在取消导出",
   done: "正在完成文件",

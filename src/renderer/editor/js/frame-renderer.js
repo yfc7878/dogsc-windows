@@ -19,6 +19,7 @@ import {
   clipDuration,
 } from "./model.js";
 import { automaticFocusAt } from "./auto-zoom.js";
+import { cursorStateAt } from "./pointer-smooth.js";
 
 const TAU = Math.PI * 2;
 
@@ -1369,21 +1370,19 @@ function drawCursor(ctx, document, time, width, height, screenRect) {
   const style = document.cursorStyle;
   if (style.assetID === "system.hidden") return;
 
-  const point = pointerAt(document, time);
-  if (!point) return;
+  /* Spring-smoothed, click-anchored position from the original's PointerTrack
+     port (240 Hz spring + click anchoring). The module also owns the
+     visibility rules: a pointer outside the recorded area (moved to another
+     display) or idle beyond the threshold draws nothing instead of parking
+     the cursor against the frame edge. */
+  const state = cursorStateAt(document, time);
+  if (!state || !state.visible) return;
+  const point = { x: state.x, y: state.y, vx: state.vx, vy: state.vy };
 
   /* Crop-aware, 3D-aware mapping for the pointer and every click effect. */
   const anchor = cursorAnchor(document, screenRect, point.x, point.y);
   const x = anchor.x;
   const y = anchor.y;
-
-  if (style.hideWhenIdle) {
-    const samples = document.pointerTrack?.samples || [];
-    const index = samples.findIndex((sample) => sample.t >= time);
-    const previous = samples[Math.max(0, index - 1)];
-    const idleFor = previous ? time - previous.t : 0;
-    if (idleFor > style.idleDelay) return;
-  }
 
   const baseSize = Math.max(10, height * 0.028 * style.size);
 

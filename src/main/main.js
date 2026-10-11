@@ -923,6 +923,24 @@ async function runSmokeTest(outputDir, projectPath) {
     const editor = windows.createEditor({ projectPath });
     await shoot("04-editor", editor, 7000);
     await dumpDiagnostics(editor, "editor");
+    /* A smoke run must never leave the user's project modified. The editor
+       autosaves every 20 seconds (and again on unload) whenever the store is
+       dirty, so a probe that commits — even one that undoes afterwards — could
+       end up persisted to disk. Neutralise the store's save for this window;
+       probes still exercise the full in-memory path, and the export reads the
+       live store, so nothing else is affected. */
+    await editor.webContents
+      .executeJavaScript(
+        `(() => {
+           const store = window.__dogscStore;
+           if (store && !store.__smokeNoSave) {
+             store.__smokeNoSave = true;
+             store.save = async () => null;
+           }
+           return Boolean(store);
+         })()`
+      )
+      .catch(() => {});
     if (process.env.DOGSC_RENDER_TEST) {
       await runRenderTest(editor);
     }
@@ -1608,16 +1626,25 @@ async function runDragTest(win, name) {
     `[drag-test] ${name}: afterDown=${JSON.stringify(afterDown)} afterMove1=${JSON.stringify(afterMove1)}`
   );
   const moves = 10;
-  for (let index = 2; index <= moves; index += 1) {
-    await win.webContents.executeJavaScript(
-      `window.dispatchEvent(new MouseEvent("mousemove", {
-         screenX: ${press.screenX + index * 10},
-         screenY: ${press.screenY + index * 5},
-       }))`
-    );
-    await new Promise((resolve) => setTimeout(resolve, 40));
-  }
-  /* Let the final rAF land before mouseup — stop() cancels a pending one. */
+  /* Dispatch the remaining moves in ONE synchronous task. With 40ms gaps a
+     real click on the machine (the user may be working while the suite runs)
+     ends the synthetic drag mid-flight via a window-level mouseup and the
+     window only moves part-way — the check has to be deterministic even
+     while the desktop is in use. */
+  await win.webContents.executeJavaScript(
+    `(() => {
+       for (let index = 2; index <= ${moves}; index += 1) {
+         window.dispatchEvent(new MouseEvent("mousemove", {
+           screenX: ${press.screenX} + index * 10,
+           screenY: ${press.screenY} + index * 5,
+         }));
+       }
+       return true;
+     })()`
+  );
+  /* Let the batched rAF land before mouseup — stop() would cancel a pending
+     one and the final position would never be applied. */
+  await new Promise((resolve) => setTimeout(resolve, 180));
   await new Promise((resolve) => setTimeout(resolve, 150));
   await win.webContents.executeJavaScript(
     `window.dispatchEvent(new MouseEvent("mouseup", {}))`

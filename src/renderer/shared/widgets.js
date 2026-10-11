@@ -586,9 +586,13 @@ export function enableManualDrag(
     windowsApi.getBounds().then((bounds) => {
       if (!bounds) return;
       /* Seed the pressing stream's anchor with the mousedown itself, so its
-         first move contributes a delta instead of merely initializing. */
+         first move contributes a delta instead of merely initializing. The
+         stream that pressed owns the drag: stray events from the other stream
+         (a real cursor drifting over the window while an automated drag runs,
+         or the reverse) must not move the window. */
       const stream = event.isTrusted ? "trusted" : "synthetic";
       drag = {
+        owner: stream,
         base: bounds,
         last: { trusted: null, synthetic: null, [stream]: { x: event.screenX, y: event.screenY } },
         dx: 0,
@@ -600,6 +604,7 @@ export function enableManualDrag(
   window.addEventListener("mousemove", (event) => {
     if (!drag) return;
     const stream = event.isTrusted ? "trusted" : "synthetic";
+    if (stream !== drag.owner) return;
     const last = drag.last[stream];
     if (last) {
       drag.dx += event.screenX - last.x;
