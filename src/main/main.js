@@ -1511,6 +1511,11 @@ async function runExportTest(win, outputDir) {
       previousExportLocation = prefs.get("exportLocation");
     }
     prefs.set("exportLocation", outputDir);
+    /* The panel outputs under its own file name; rename the artifact so the
+       verification below can find it (`file-name` is read at start time). */
+    await win.webContents.executeJavaScript(
+      `(() => { const input = document.getElementById("file-name"); if (input) input.value = "export-check"; return true; })()`
+    );
     await win.webContents.executeJavaScript(`document.getElementById("btn-start").click(), true`);
   } else {
     await win.webContents.executeJavaScript(
@@ -1820,16 +1825,43 @@ async function runEditTest(win) {
 
       s.select("zoom", zoom.id);
       out.copied = s.copySelection();
-      /* Shorten the copy so it fits in the free span near the end of the
-         project; the demo's zoom clips are 3.6s and fill the timeline. */
-      s.clipboard.clip.duration = 1;
-      out.paste = s.pasteClipboard(10.5);
+      /* Paste into whatever free gap the project actually has — layouts differ
+         (the demo fills its tail with 3.6s zooms; real recordings may not), so
+         a hardcoded position turned the paste into a correct "no-room"
+         refusal and failed the test against valid projects. */
+      const spans = s.document.timeline.zoomClips
+        .map((c) => [c.startTime, c.startTime + c.duration])
+        .sort((a, b) => a[0] - b[0]);
+      let gapStart = 0;
+      let gapLength = 0;
+      let cursor = 0;
+      for (const [from, to] of spans) {
+        if (from - cursor > gapLength) {
+          gapStart = cursor;
+          gapLength = from - cursor;
+        }
+        cursor = Math.max(cursor, to);
+      }
+      if (s.duration - cursor > gapLength) {
+        gapStart = cursor;
+        gapLength = s.duration - cursor;
+      }
+      out.gap = { start: Number(gapStart.toFixed(2)), length: Number(gapLength.toFixed(2)) };
+      if (gapLength > 0.25) {
+        s.clipboard.clip.duration = Math.min(1, gapLength - 0.1);
+        out.paste = s.pasteClipboard(gapStart + 0.05);
+      } else {
+        out.paste = { ok: false, reason: "no-gap-in-test-layout" };
+      }
       out.zoomCountAfterPaste = s.document.timeline.zoomClips.length;
 
-      /* Pasting onto an occupied span must be refused, not silently overlap. */
+      /* Pasting onto an occupied span must be refused, not silently overlap.
+         A short probe at the middle of the existing zoom clears the no-room
+         check and lands squarely on the occupied branch whenever the layout
+         allows it; a refusal for any reason is acceptable, overlap is not. */
       s.select("zoom", zoom.id);
-      out.overlapRefused = s.pasteClipboard(zoom.startTime) === false
-        || s.pasteClipboard(zoom.startTime).reason === "occupied";
+      s.clipboard.clip.duration = Math.min(0.3, zoom.duration);
+      out.overlapRefused = s.pasteClipboard(zoom.startTime + zoom.duration / 2).ok === false;
 
       /* Attribute transfer keeps the target's position and duration. */
       const target = s.document.timeline.zoomClips[s.document.timeline.zoomClips.length - 1];
@@ -1876,7 +1908,7 @@ async function runEditTest(win) {
       await api.prefs.set("cameraLayoutPresets", s.cameraLayoutPresets);
 
       /* Undo everything so the project is left untouched. */
-      for (let i = 0; i < 8; i += 1) s.undo();
+      for (let i = 0; i < 16; i += 1) s.undo();
       out.zoomCountRestored = s.document.timeline.zoomClips.length;
       return out;
     })()`);
@@ -1898,7 +1930,8 @@ async function runEditTest(win) {
   }
 }
 
-/** Reports the renderer's DOM shape so a blank window is never a mystery. */async function dumpDiagnostics(win, name) {
+/** Reports the renderer's DOM shape so a blank window is never a mystery. */
+async function dumpDiagnostics(win, name) {
   if (!win || win.isDestroyed()) return;
   try {
     const summary = await win.webContents.executeJavaScript(`(() => ({
