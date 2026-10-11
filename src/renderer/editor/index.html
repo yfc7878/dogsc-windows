@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: dogsc-media:; media-src 'self' blob: dogsc-media:; connect-src 'self' dogsc-media:"
+    />
+    <link rel="stylesheet" href="../shared/tokens.css" />
+    <link rel="stylesheet" href="../shared/ui.css" />
+    <link rel="stylesheet" href="./editor.css" />
+    <title>DogSC</title>
+  </head>
+  <body>
+    <div class="editor-root">
+      <header class="top-bar drag">
+        <div class="top-left" id="top-left"></div>
+        <div class="spacer"></div>
+        <div class="top-right" id="top-right"></div>
+      </header>
+
+      <main class="workspace">
+        <div class="tool-rail" id="tool-rail"></div>
+
+        <div class="canvas-column">
+          <div class="canvas-toolbar" id="canvas-toolbar"></div>
+          <div class="preview-host workspace-grid" id="preview-host">
+            <canvas id="preview-canvas"></canvas>
+            <div class="empty-state" id="empty-state" hidden>
+              <h2>正在载入项目</h2>
+              <p>准备录屏、摄像头和声音素材</p>
+              <button class="btn btn-primary" id="btn-open-project" type="button">打开项目…</button>
+            </div>
+          </div>
+        </div>
+
+        <aside class="inspector" id="inspector"></aside>
+      </main>
+
+      <div class="splitter" id="splitter"></div>
+
+      <section class="timeline" id="timeline" style="height: 250px"></section>
+    </div>
+
+    <script type="module" src="./js/app.js"></script>
+  </body>
+</html>

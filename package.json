@@ -1,0 +1,66 @@
+{
+  "name": "dogsc-windows",
+  "productName": "DogSC",
+  "version": "0.1.2",
+  "description": "Windows port of DogSC — smooth screen capture and lightweight editing.",
+  "main": "src/main/main.js",
+  "author": "DogSC Windows Port",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dist": "electron-builder --win",
+    "test": "node tools/test-auto-zoom.mjs && node tools/test-pointer-smooth.mjs",
+    "icon": "node tools/make-icon.js",
+    "demo": "node tools/make-demo-project.js"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.2.0"
+  },
+  "build": {
+    "appId": "cn.laogou.dogsc",
+    "productName": "DogSC",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "resources/**/*",
+      "package.json",
+      "!node_modules/ffmpeg-static/**"
+    ],
+    "extraResources": [
+      {
+        "from": "node_modules/ffmpeg-static/ffmpeg.exe",
+        "to": "ffmpeg/ffmpeg.exe"
+      },
+      {
+        "from": "node_modules/ffmpeg-static/ffmpeg.exe.LICENSE",
+        "to": "ffmpeg/LICENSE"
+      },
+      {
+        "from": "resources/pointer-observer.ps1",
+        "to": "scripts/pointer-observer.ps1"
+      },
+      {
+        "from": "resources/desktop-icons.ps1",
+        "to": "scripts/desktop-icons.ps1"
+      }
+    ],
+  "win": {
+    "target": [
+      "portable",
+      "nsis"
+    ],
+    "icon": "resources/icon.ico"
+  },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

@@ -1,0 +1,938 @@
+/* ==========================================================================
+   Editor workspace
+   Layout follows EditorView.swift: a unified top bar, a floating tool rail on
+   the left of the canvas, the inspector on the right, and a resizable
+   multi-track timeline pinned to the bottom.
+   ========================================================================== */
+
+.editor-root {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--background-deep);
+  overflow: hidden;
+}
+
+/* --------------------------------------------------------------------------
+   Top bar
+   -------------------------------------------------------------------------- */
+
+.top-bar {
+  flex: none;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 12px;
+  background: var(--background-deep);
+  border-bottom: 0.75px solid var(--hairline);
+}
+
+.top-left,
+.top-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  -webkit-app-region: no-drag;
+}
+
+.project-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary-text);
+  cursor: default;
+  max-width: 320px;
+}
+.project-title:hover {
+  background: var(--chrome-045);
+}
+.project-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-title .icon {
+  color: var(--secondary-text);
+}
+
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+}
+.window-controls button {
+  width: 34px;
+  height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--secondary-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+.window-controls button:hover {
+  background: var(--chrome-045);
+  color: var(--primary-text);
+}
+.window-controls button[data-action="close"]:hover {
+  background: var(--recording);
+  color: #fff;
+}
+
+/* --------------------------------------------------------------------------
+   Workspace
+   -------------------------------------------------------------------------- */
+
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.tool-rail {
+  flex: none;
+  width: 72px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-radius: var(--radius-floating);
+  background: var(--card-elevated);
+  border: 0.75px solid var(--hairline);
+  box-shadow: 0 5px 14px var(--soft-shadow);
+  overflow-y: auto;
+}
+
+.rail-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 56px;
+  height: 52px;
+  border: 0;
+  border-radius: var(--radius-group);
+  background: transparent;
+  color: var(--secondary-text);
+  cursor: default;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+.rail-button span {
+  font-size: 12px;
+  line-height: 1;
+}
+.rail-button:hover {
+  background: var(--chrome-045);
+  color: var(--primary-text);
+}
+.rail-button.is-selected {
+  background: var(--rail-selection-wash);
+  color: var(--primary-text);
+}
+.rail-button.is-selected span {
+  font-weight: 600;
+}
+
+.canvas-column {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.canvas-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border: 0.75px solid var(--control-border);
+  border-radius: var(--radius-compact);
+  background: var(--card-elevated);
+  color: var(--primary-text);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: default;
+  box-shadow: 0 1px 2px var(--soft-shadow);
+  transition: background 0.14s ease;
+}
+.chip:hover {
+  background: var(--panel-raised);
+}
+.chip .icon {
+  color: var(--secondary-text);
+}
+.chip-icon {
+  width: 30px;
+  padding: 0;
+  justify-content: center;
+}
+.chip.is-active {
+  background: var(--rail-selection-wash);
+  border-color: transparent;
+}
+.chip.is-on {
+  background: var(--selection-wash);
+}
+
+.preview-host {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border-radius: var(--radius-floating);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+#preview-canvas {
+  display: block;
+  border-radius: 6px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.22);
+  background: #000;
+}
+
+.empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: color-mix(in srgb, var(--background-deep) 88%, transparent);
+  text-align: center;
+}
+/* `display: flex` above would otherwise win over the UA `[hidden]` rule. */
+.empty-state[hidden] {
+  display: none;
+}
+.empty-state h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+.empty-state p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--secondary-text);
+}
+
+/* --------------------------------------------------------------------------
+   Crop overlay
+   -------------------------------------------------------------------------- */
+
+.crop-overlay {
+  position: absolute;
+  pointer-events: none;
+}
+.crop-overlay .crop-rect {
+  position: absolute;
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+  cursor: move;
+}
+.crop-handle {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  margin: -7px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1.5px solid rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+  cursor: crosshair;
+}
+.crop-handle[data-handle="nw"] { left: 0; top: 0; }
+.crop-handle[data-handle="ne"] { left: 100%; top: 0; }
+.crop-handle[data-handle="sw"] { left: 0; top: 100%; }
+.crop-handle[data-handle="se"] { left: 100%; top: 100%; }
+.crop-handle[data-handle="n"] { left: 50%; top: 0; }
+.crop-handle[data-handle="s"] { left: 50%; top: 100%; }
+.crop-handle[data-handle="w"] { left: 0; top: 50%; }
+.crop-handle[data-handle="e"] { left: 100%; top: 50%; }
+
+.crop-size {
+  position: absolute;
+  top: -28px;
+  left: 0;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.crop-actions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  pointer-events: auto;
+}
+.crop-hint {
+  font-size: 11.5px;
+  color: #fff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+}
+
+/* --------------------------------------------------------------------------
+   Inspector extras
+   -------------------------------------------------------------------------- */
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+.preset-grid.wide {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.preset-card {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 7px 9px;
+  border: 0.75px solid var(--hairline);
+  border-radius: var(--radius-control);
+  background: var(--card-elevated);
+  color: var(--primary-text);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: default;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+.preset-card:hover {
+  background: var(--panel-raised);
+}
+.preset-card.is-selected {
+  border-color: var(--success);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 20%, transparent);
+}
+.preset-card .icon {
+  color: var(--secondary-text);
+  flex: none;
+}
+.preset-card span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset-card .swatch {
+  width: 26px;
+  height: 20px;
+  border-radius: 5px;
+  flex: none;
+  border: 0.75px solid var(--hairline);
+}
+.swatch[data-pattern="黑曜石网格"] { background: linear-gradient(135deg, #0d0f12 45%, #232a33); }
+.swatch[data-pattern="工程白网格"] { background: linear-gradient(135deg, #f6f7f9 45%, #dfe3e8); }
+.swatch[data-pattern="暗夜星阵"] { background: radial-gradient(circle at 30% 30%, #39414d, #0b0d10); }
+.swatch[data-pattern="建筑极简点"] { background: radial-gradient(circle at 50% 50%, #b9bec6 20%, #f2f3f5 22%); }
+.swatch[data-pattern="立体等角网"] { background: repeating-linear-gradient(45deg, #111318, #111318 4px, #232a34 4px, #232a34 5px); }
+.swatch[data-pattern="极光流体星云"] { background: linear-gradient(135deg, #0b1220, #3b82f6, #a855f7); }
+
+.position-pad {
+  position: relative;
+  height: 104px;
+  border-radius: var(--radius-control);
+  background: var(--control-well);
+  border: 0.75px solid var(--hairline);
+  cursor: crosshair;
+  overflow: hidden;
+}
+.position-cross {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, var(--chrome-085) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--chrome-085) 1px, transparent 1px);
+  background-size: 25% 25%;
+  pointer-events: none;
+}
+.position-dot {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  margin: -6.5px;
+  border-radius: 50%;
+  background: var(--platinum-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--platinum-accent) 22%, transparent);
+  pointer-events: none;
+}
+
+.swatch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.swatch-row .swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 0.75px solid var(--chrome-14);
+  cursor: default;
+  transition: transform 0.12s ease;
+}
+.swatch-row .swatch:hover {
+  transform: scale(1.08);
+}
+.swatch-row .swatch.is-selected {
+  box-shadow: 0 0 0 2px var(--card-elevated), 0 0 0 3.5px var(--success);
+}
+
+/* --------------------------------------------------------------------------
+   壁纸库 (SystemWallpaperLibrary)
+   -------------------------------------------------------------------------- */
+
+.wallpaper-scroll {
+  max-height: 52vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.wallpaper-current {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: var(--radius-compact);
+  background: var(--group-surface);
+}
+.wallpaper-current img {
+  width: 72px;
+  height: 46px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex: none;
+  background: var(--chrome-045);
+}
+.wallpaper-current strong {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.wallpaper-current small {
+  font-size: 11px;
+  opacity: 0.62;
+}
+
+.wallpaper-group-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  opacity: 0.66;
+  margin-top: 4px;
+}
+
+.wallpaper-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
+}
+
+.wallpaper-card {
+  padding: 0;
+  border: 1.5px solid transparent;
+  border-radius: var(--radius-compact);
+  overflow: hidden;
+  cursor: default;
+  background: var(--group-surface);
+  aspect-ratio: 16 / 10;
+  transition: border-color 0.14s ease, transform 0.14s ease;
+}
+.wallpaper-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.wallpaper-card:hover {
+  border-color: var(--selection-border);
+  transform: translateY(-1px);
+}
+
+/* Hex entry paired with a colour swatch (EditorHexColorInput). */
+.hex-field {
+  width: 92px;
+  flex: none;
+  height: 26px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-transform: uppercase;
+}
+
+.color-chip {
+  width: 46px;
+  height: 26px;
+  border-radius: 7px;
+  border: 0.75px solid var(--control-border);
+  cursor: default;
+}
+
+.order-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   Splitter
+   -------------------------------------------------------------------------- */
+
+.splitter {
+  flex: none;
+  height: 6px;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.splitter::after {
+  content: "";
+  width: 44px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--chrome-16);
+}
+.splitter:hover::after {
+  background: var(--chrome-28);
+}
+
+/* --------------------------------------------------------------------------
+   Timeline
+   -------------------------------------------------------------------------- */
+
+.timeline {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  margin: 0 12px 12px;
+  border-radius: var(--radius-floating);
+  background: var(--card-elevated);
+  border: 0.75px solid var(--hairline);
+  box-shadow: 0 5px 14px var(--soft-shadow);
+  overflow: hidden;
+}
+
+.timeline-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 0.75px solid var(--hairline);
+}
+.toolbar-left,
+.toolbar-center,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.toolbar-center {
+  flex: 1;
+  justify-content: center;
+}
+.timecode {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--primary-text);
+  min-width: 130px;
+  text-align: center;
+}
+.toolbar-left .btn.is-active {
+  background: var(--rail-selection-wash);
+}
+.toolbar-right .chip {
+  height: 26px;
+  padding: 0 9px;
+  font-size: 11.5px;
+}
+.toolbar-right .chip.is-on {
+  background: var(--rail-selection-wash);
+  border-color: transparent;
+}
+
+.timeline-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.track-headers {
+  flex: none;
+  width: 132px;
+  border-right: 0.75px solid var(--hairline);
+  overflow: hidden;
+  background: var(--panel-surface);
+}
+
+.track-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px 0 12px;
+  border-bottom: 0.75px solid var(--hairline);
+  font-size: 12px;
+  color: var(--secondary-text);
+  cursor: default;
+}
+.track-header:hover {
+  background: var(--chrome-028);
+}
+.track-icon {
+  display: flex;
+  color: var(--secondary-text);
+  flex: none;
+}
+.track-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.track-toggle {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--secondary-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+.track-toggle:hover {
+  background: var(--chrome-045);
+}
+
+.track-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  position: relative;
+}
+
+.track-lanes {
+  position: relative;
+  min-width: 100%;
+}
+
+.ruler {
+  position: relative;
+  border-bottom: 0.75px solid var(--hairline);
+  background: var(--panel-surface);
+  cursor: ew-resize;
+  overflow: hidden;
+}
+.ruler-tick {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-left: 0.75px solid var(--chrome-085);
+  padding-left: 5px;
+  display: flex;
+  align-items: center;
+}
+.ruler-tick span {
+  font-size: 10.5px;
+  color: var(--secondary-text);
+  white-space: nowrap;
+}
+.ruler-hover {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  background: var(--chrome-16);
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--primary-text);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.marker {
+  position: absolute;
+  top: 1px;
+  transform: translateX(-50%);
+  color: var(--amber);
+  cursor: default;
+  z-index: 4;
+}
+
+.lane {
+  position: relative;
+  border-bottom: 0.75px solid var(--hairline);
+  background: var(--panel-surface);
+}
+.lane:last-child {
+  border-bottom: 0;
+}
+.lane-primary {
+  background: var(--background-deep);
+}
+.lane-empty {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px;
+  color: var(--secondary-text);
+}
+
+.clip {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  border-radius: var(--radius-compact);
+  overflow: hidden;
+  cursor: default;
+  border: 0.75px solid var(--chrome-14);
+  background: linear-gradient(to bottom, var(--timeline-clip-top), var(--timeline-clip-bottom));
+  transition: box-shadow 0.14s ease;
+}
+.clip.is-selected {
+  box-shadow: 0 0 0 2px var(--success);
+}
+.clip-primary {
+  top: 2px;
+  bottom: 2px;
+}
+.clip .filmstrip {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.92;
+}
+/* The 波形 presentation draws the same clip as an audio waveform instead of
+   thumbnails; the dark well keeps the white trace legible. */
+.clip-primary .waveform {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(12, 16, 20, 0.34);
+}
+.clip-label {
+  position: absolute;
+  left: 6px;
+  bottom: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+.clip-title {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #3a2f1d;
+  padding: 0 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.clip-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 3;
+}
+.clip-handle.left {
+  left: 0;
+}
+.clip-handle.right {
+  right: 0;
+}
+.clip-handle:hover {
+  background: color-mix(in srgb, var(--success) 45%, transparent);
+}
+
+.clip-zoom {
+  background: var(--timeline-zoom-surface);
+  border-color: rgba(0, 0, 0, 0.14);
+}
+.clip-screen3d,
+.clip-cameramotion {
+  background: linear-gradient(to bottom, #cbd8ea, #b6c6de);
+  border-color: rgba(0, 0, 0, 0.12);
+}
+.clip-sticker {
+  background: linear-gradient(to bottom, #e6d7ef, #d6c2e6);
+  border-color: rgba(0, 0, 0, 0.12);
+}
+.clip-mosaic {
+  background: linear-gradient(to bottom, #d9d2e9, #c6bcdd);
+  border-color: rgba(0, 0, 0, 0.12);
+}
+.clip-audio {
+  background: linear-gradient(to bottom, #7fb2d6, #6299c2);
+  border-color: rgba(0, 0, 0, 0.12);
+}
+.clip-audio .waveform {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.cut-seam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  margin-left: -6px;
+  z-index: 5;
+  cursor: default;
+}
+.cut-seam::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--recording);
+  opacity: 0.85;
+}
+
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1.5px;
+  background: var(--recording);
+  z-index: 6;
+  pointer-events: none;
+}
+.playhead-grip {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--recording);
+}
+
+/* --------------------------------------------------------------------------
+   Shortcut sheet
+   -------------------------------------------------------------------------- */
+
+.shortcut-sheet {
+  width: min(760px, calc(100vw - 60px));
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+}
+.shortcut-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 26px;
+  margin-top: 6px;
+}
+.shortcut-column h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--secondary-text);
+  text-transform: uppercase;
+}
+.shortcut-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12.5px;
+}
+.shortcut-row kbd {
+  flex: none;
+  min-width: 104px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--group-surface);
+  border: 0.75px solid var(--hairline);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--primary-text);
+}
+.shortcut-row span {
+  color: var(--secondary-text);
+  line-height: 1.4;
+}
+
+/* Dark appearance tweaks for clip artwork */
+[data-theme="dark"] .clip-screen3d,
+[data-theme="dark"] .clip-cameramotion {
+  background: linear-gradient(to bottom, #3c4a60, #2f3b4d);
+}
+[data-theme="dark"] .clip-sticker {
+  background: linear-gradient(to bottom, #4a3f57, #3b3245);
+}
+[data-theme="dark"] .clip-mosaic {
+  background: linear-gradient(to bottom, #443c55, #373044);
+}
+[data-theme="dark"] .clip-audio {
+  background: linear-gradient(to bottom, #33566f, #2a4557);
+}
+[data-theme="dark"] .clip-title {
+  color: #f0ece2;
+}

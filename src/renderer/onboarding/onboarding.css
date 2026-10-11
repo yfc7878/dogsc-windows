@@ -1,0 +1,154 @@
+/* ==========================================================================
+   First-use guide (FirstLaunchIntroduction.swift / FirstUseTour.swift)
+   ========================================================================== */
+
+html,
+body {
+  background: #0b0c0d;
+  color: #f2f0ea;
+  overflow: hidden;
+}
+
+.intro {
+  position: relative;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.glow {
+  position: absolute;
+  inset: -20% -10% auto -10%;
+  height: 70%;
+  background: radial-gradient(
+    ellipse at 50% 0%,
+    rgba(242, 240, 234, 0.16),
+    rgba(94, 204, 145, 0.08) 42%,
+    transparent 70%
+  );
+  pointer-events: none;
+}
+
+.intro-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  padding: 56px 62px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.logo {
+  width: 62px;
+  height: 62px;
+  border-radius: 17px;
+  background: linear-gradient(160deg, #3a3f47, #171a1e);
+  border: 0.75px solid rgba(255, 255, 255, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 27px;
+  font-weight: 700;
+  color: #f2f0ea;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+}
+
+.intro-body h1 {
+  margin: 6px 0 0;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.intro-body > p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: rgba(242, 240, 234, 0.66);
+  max-width: 620px;
+}
+
+.steps {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+
+.step-card {
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+  border-radius: var(--radius-card);
+  background: rgba(255, 255, 255, 0.045);
+  border: 0.75px solid rgba(255, 255, 255, 0.08);
+}
+.step-card.is-current {
+  background: rgba(94, 204, 145, 0.12);
+  border-color: rgba(94, 204, 145, 0.4);
+}
+.step-index {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.step-card.is-current .step-index {
+  background: var(--success);
+  color: #0b0c0d;
+}
+.step-text h4 {
+  margin: 0 0 3px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.step-text p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: rgba(242, 240, 234, 0.6);
+}
+
+.intro-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 62px 26px;
+}
+.intro-foot .btn {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: #f2f0ea;
+}
+.intro-foot .btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+.intro-foot .btn-primary {
+  background: #f2f0ea;
+  color: #14161a;
+}
+
+.progress-dots {
+  display: flex;
+  gap: 6px;
+}
+.progress-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+}
+.progress-dots i.is-active {
+  background: var(--success);
+}

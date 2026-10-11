@@ -1,0 +1,82 @@
+/* ==========================================================================
+   Recording completion sheet (RecordingCompletionWindow.swift)
+   ========================================================================== */
+
+html,
+body {
+  background: var(--panel-surface);
+  overflow: hidden;
+}
+
+.sheet {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-surface);
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 14px 12px 22px;
+  border-bottom: 0.75px solid var(--hairline);
+  flex: none;
+}
+
+.sheet-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.preview {
+  position: relative;
+  margin: 20px 22px 0;
+  border-radius: var(--radius-card);
+  background: var(--sleeping-monitor);
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.preview-empty {
+  color: var(--secondary-text);
+  font-size: 12.5px;
+}
+
+.preview-meta {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  padding: 3px 9px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.sheet-hint {
+  margin: 14px 22px 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--secondary-text);
+}
+
+.sheet-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 22px 20px;
+  flex: none;
+}

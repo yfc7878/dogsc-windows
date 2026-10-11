@@ -1,0 +1,219 @@
+/* ==========================================================================
+   Export sheet (EditorExportViews.swift)
+   Two columns: authored options on the left, live spec readout on the right.
+   ========================================================================== */
+
+html,
+body {
+  background: var(--panel-surface);
+  overflow: hidden;
+}
+
+.sheet {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-surface);
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 14px 14px 13px 22px;
+  border-bottom: 0.75px solid var(--hairline);
+  flex: none;
+}
+
+.sheet-icon .icon {
+  width: 22px;
+  height: 22px;
+  color: var(--primary-text);
+}
+
+.sheet-title {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.sheet-sub {
+  font-size: 12px;
+  color: var(--secondary-text);
+}
+
+.sheet-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.column {
+  padding: 20px 22px;
+  overflow-y: auto;
+}
+.column.left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.column.right {
+  width: 340px;
+  flex: none;
+  border-left: 0.75px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.field-block {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 42px;
+  padding: 0 12px;
+  border: 0.75px solid var(--control-border);
+  border-radius: var(--radius-control);
+  background: var(--card-elevated);
+}
+.file-row .text-field {
+  border: 0;
+  padding: 0;
+  height: 38px;
+  font-size: 13.5px;
+  background: transparent;
+}
+.file-row .text-field:focus {
+  box-shadow: none;
+}
+.file-ext {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--group-surface);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--secondary-text);
+}
+
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 34px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--secondary-text);
+  font-size: 12.5px;
+  cursor: default;
+  width: 100%;
+}
+.folder-row:hover {
+  color: var(--primary-text);
+}
+.folder-path {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.frame-preview {
+  position: relative;
+  border-radius: var(--radius-card);
+  background: var(--background-deep);
+  background-image: radial-gradient(
+    circle at center,
+    var(--workspace-grid-dot) 1px,
+    transparent 1px
+  );
+  background-size: 9px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  min-height: 210px;
+  border: 0.75px solid var(--hairline);
+}
+#export-preview {
+  max-width: 100%;
+  max-height: 260px;
+  border-radius: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+  background: #000;
+}
+
+.specs {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.specs > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.specs dt {
+  font-size: 12.5px;
+  color: var(--secondary-text);
+}
+.specs dd {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary-text);
+}
+
+.progress-bar {
+  flex: none;
+  padding: 12px 22px;
+  border-top: 0.75px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.progress-track {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--chrome-16);
+  overflow: hidden;
+}
+.progress-track i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--platinum-accent);
+  transition: width 0.2s ease;
+}
+.progress-meta {
+  display: flex;
+  align-items: center;
+  font-size: 11.5px;
+  color: var(--secondary-text);
+}
+
+.sheet-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 22px 16px;
+  border-top: 0.75px solid var(--hairline);
+}
+.estimate {
+  font-size: 12.5px;
+  color: var(--secondary-text);
+}

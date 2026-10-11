@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    />
+    <link rel="stylesheet" href="../shared/tokens.css" />
+    <link rel="stylesheet" href="../shared/ui.css" />
+    <link rel="stylesheet" href="./area.css" />
+    <title>选择录制范围</title>
+  </head>
+  <body>
+    <div class="overlay" id="overlay">
+      <div class="shade" id="shade"></div>
+      <div class="selection" id="selection" hidden>
+        <div class="handle" data-handle="nw"></div>
+        <div class="handle" data-handle="ne"></div>
+        <div class="handle" data-handle="sw"></div>
+        <div class="handle" data-handle="se"></div>
+        <div class="handle" data-handle="n"></div>
+        <div class="handle" data-handle="s"></div>
+        <div class="handle" data-handle="w"></div>
+        <div class="handle" data-handle="e"></div>
+        <div class="size-tag tabular" id="size-tag">0 × 0</div>
+      </div>
+      <div class="hint" id="hint">拖动以选择录制区域 · Esc 取消</div>
+      <div class="confirm-bar" id="confirm-bar" hidden>
+        <span class="dims tabular" id="dims"></span>
+        <button class="btn" id="btn-cancel">取消</button>
+        <button class="btn btn-primary" id="btn-confirm">开始录制</button>
+      </div>
+    </div>
+    <script type="module" src="./area.js"></script>
+  </body>
+</html>

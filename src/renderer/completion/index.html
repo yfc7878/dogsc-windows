@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: dogsc-media:"
+    />
+    <link rel="stylesheet" href="../shared/tokens.css" />
+    <link rel="stylesheet" href="../shared/ui.css" />
+    <link rel="stylesheet" href="./completion.css" />
+    <title>录制完成</title>
+  </head>
+  <body>
+    <div class="sheet">
+      <header class="sheet-head js-drag">
+        <span class="sheet-title">录制完成</span>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost btn-icon no-drag" id="btn-close" type="button"></button>
+      </header>
+
+      <div class="preview">
+        <img id="poster" alt="" />
+        <div class="preview-empty" id="preview-empty">预览暂不可用</div>
+        <div class="preview-meta tabular" id="preview-meta"></div>
+      </div>
+
+      <p class="sheet-hint">保存项目以便稍后编辑，或将这次录制移到回收站。</p>
+
+      <footer class="sheet-actions">
+        <button class="btn" id="btn-discard" type="button">移到回收站</button>
+        <span class="spacer"></span>
+        <button class="btn" id="btn-save" type="button">保存项目</button>
+        <button class="btn btn-primary" id="btn-edit" type="button">进入编辑</button>
+      </footer>
+    </div>
+    <script type="module" src="./completion.js"></script>
+  </body>
+</html>

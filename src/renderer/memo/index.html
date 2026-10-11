@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    />
+    <link rel="stylesheet" href="../shared/tokens.css" />
+    <link rel="stylesheet" href="../shared/ui.css" />
+    <link rel="stylesheet" href="./memo.css" />
+    <title>备忘录</title>
+  </head>
+  <body>
+    <div class="memo-surface" id="surface">
+      <header class="memo-head js-drag">
+        <span class="memo-title">备忘录</span>
+        <span class="memo-badge">仅自己可见</span>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost btn-icon no-drag" id="btn-read" type="button"></button>
+        <button class="btn btn-ghost btn-icon no-drag" id="btn-close" type="button"></button>
+      </header>
+
+      <div class="memo-body">
+        <textarea
+          id="editor"
+          class="memo-editor"
+          placeholder="写下或粘贴要讲的内容…"
+          spellcheck="false"
+        ></textarea>
+        <div class="memo-reader" id="reader" hidden></div>
+      </div>
+
+      <footer class="memo-foot">
+        <button class="btn btn-ghost btn-icon" id="btn-smaller" type="button"></button>
+        <span class="memo-size tabular" id="size-label">15</span>
+        <button class="btn btn-ghost btn-icon" id="btn-bigger" type="button"></button>
+        <span class="spacer"></span>
+        <span class="memo-hint" id="opacity-label">背景不透明度</span>
+        <input type="range" id="opacity" min="0.25" max="1" step="0.01" />
+        <span class="memo-autosave">自动保存到本机</span>
+      </footer>
+    </div>
+    <script type="module" src="./memo.js"></script>
+  </body>
+</html>

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: dogsc-media:; media-src 'self' blob: dogsc-media:; connect-src 'self' dogsc-media:"
+    />
+    <link rel="stylesheet" href="../shared/tokens.css" />
+    <link rel="stylesheet" href="../shared/ui.css" />
+    <link rel="stylesheet" href="./export.css" />
+    <title>导出作品</title>
+  </head>
+  <body>
+    <div class="sheet">
+      <header class="sheet-head js-drag">
+        <span class="sheet-icon" id="head-icon"></span>
+        <div class="col">
+          <span class="sheet-title">导出作品</span>
+          <span class="sheet-sub" id="sheet-sub"></span>
+        </div>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost btn-icon no-drag" id="btn-close" type="button"></button>
+      </header>
+
+      <div class="sheet-body">
+        <div class="column left">
+          <section class="field-block">
+            <h3 class="section-title">文件名</h3>
+            <div class="file-row">
+              <input class="text-field" id="file-name" spellcheck="false" />
+              <span class="file-ext" id="file-ext">.mp4</span>
+              <button class="btn btn-icon" id="btn-rename" type="button"></button>
+            </div>
+            <button class="folder-row" id="btn-folder" type="button">
+              <span class="folder-icon" id="folder-icon"></span>
+              <span class="folder-path" id="folder-path">尚未选择</span>
+              <span class="folder-chev" id="folder-chev"></span>
+            </button>
+          </section>
+
+          <section class="field-block">
+            <h3 class="section-title">导出内容</h3>
+            <div class="choice-row" id="content-choices"></div>
+          </section>
+
+          <section class="field-block" id="block-resolution">
+            <h3 class="section-title">分辨率</h3>
+            <div class="choice-row" id="resolution-choices"></div>
+          </section>
+
+          <section class="field-block" id="block-fps">
+            <h3 class="section-title">帧率</h3>
+            <div class="choice-row" id="fps-choices"></div>
+          </section>
+        </div>
+
+        <div class="column right">
+          <h3 class="section-title">当前画面</h3>
+          <div class="frame-preview">
+            <canvas id="export-preview"></canvas>
+          </div>
+          <dl class="specs">
+            <div><dt>格式</dt><dd id="spec-format">MP4</dd></div>
+            <div><dt>分辨率</dt><dd id="spec-size" class="tabular">—</dd></div>
+            <div><dt>帧率</dt><dd id="spec-fps" class="tabular">—</dd></div>
+            <div><dt>时长</dt><dd id="spec-duration" class="tabular">0:00</dd></div>
+          </dl>
+        </div>
+      </div>
+
+      <div class="progress-bar" id="progress" hidden>
+        <div class="progress-track"><i id="progress-fill"></i></div>
+        <div class="progress-meta">
+          <span id="progress-stage">正在准备素材</span>
+          <span class="spacer"></span>
+          <span id="progress-elapsed" class="tabular"></span>
+        </div>
+      </div>
+
+      <footer class="sheet-foot">
+        <span class="estimate" id="estimate">预计大小 · 约 —</span>
+        <span class="spacer"></span>
+        <button class="btn" id="btn-cancel" type="button">取消</button>
+        <button class="btn btn-primary" id="btn-start" type="button">开始导出视频</button>
+      </footer>
+    </div>
+
+    <script type="module" src="./export.js"></script>
+  </body>
+</html>
