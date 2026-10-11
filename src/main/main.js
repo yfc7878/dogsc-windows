@@ -917,7 +917,7 @@ async function runSmokeTest(outputDir, projectPath) {
       await runEditTest(editor);
     }
     if (process.env.DOGSC_TOPBAR_EXPORT_PROBE) {
-      await runTopbarExportProbe(editor);
+      await runTopbarExportProbe(editor, outputDir);
     }
 
     const document_ = JSON.parse(await fsp.readFile(path.join(projectPath, "project.json"), "utf8"));
@@ -1376,9 +1376,18 @@ async function runRecordingTest(outputDir) {
  * click handler passing the event object into `openExport(range)`, which
  * rebased the document onto NaN — black preview, NaN duration, zero frames.
  */
-async function runTopbarExportProbe(editor) {
+async function runTopbarExportProbe(editor, outputDir) {
   if (!editor || editor.isDestroyed()) return;
+  const fullRun =
+    Boolean(process.env.DOGSC_TOPBAR_EXPORT_RUN) && Boolean(outputDir);
   console.log("[topbar-export] clicking the editor's export button…");
+  if (fullRun) {
+    /* The panel seeds its destination from this preference at init, so point
+       it at the smoke output directory before the click and put it back after
+       the run — the same promise the export-click test makes. */
+    previousExportLocation = prefs.get("exportLocation");
+    prefs.set("exportLocation", outputDir);
+  }
   await editor.webContents.executeJavaScript(
     `document.getElementById("btn-export")?.click(), true`
   );
@@ -1395,6 +1404,7 @@ async function runTopbarExportProbe(editor) {
          fileName: document.getElementById("file-name")?.value ?? null,
          duration: document.getElementById("spec-duration")?.textContent ?? null,
          resolution: document.getElementById("spec-size")?.textContent ?? null,
+         folder: document.getElementById("folder-path")?.textContent ?? null,
        }))()`
     )
     .catch((error) => ({ error: String(error) }));
@@ -1404,6 +1414,77 @@ async function runTopbarExportProbe(editor) {
     !String(probe.duration || "").includes("NaN") &&
     String(probe.duration || "") !== "0:00";
   console.log(`[topbar-export] ${ok ? "PASS" : "FAIL"}`);
+  if (!fullRun || !ok) return;
+
+  /* Full run: drive the exact user path — the panel the topbar button opened,
+     its own 开始导出 button, then verify the resulting MP4. The output is
+     renamed first so the artifact is findable (`file-name` is read at start
+     time, so a plain value write is enough). */
+  const target = path.join(outputDir, "export-check.mp4");
+  await fsp.rm(target, { force: true });
+  await panel.webContents.executeJavaScript(
+    `(() => { const input = document.getElementById("file-name"); if (input) input.value = "export-check"; return true; })()`
+  );
+  console.log("[topbar-export] pressing 开始导出…");
+  await panel.webContents.executeJavaScript(
+    `document.getElementById("btn-start").click(), true`
+  );
+
+  /* Success writes 导出完成 into `estimate` (and 在文件夹中显示 onto the
+     button); failure switches the progress stage to 需要注意 and never
+     touches `estimate`, so both surfaces are polled. */
+  const deadline = Date.now() + 420000;
+  let status = "timeout";
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    if (panel.isDestroyed()) {
+      status = "gone";
+      break;
+    }
+    const live = await panel.webContents
+      .executeJavaScript(
+        `(() => ({
+           estimate: document.getElementById("estimate")?.textContent || "",
+           stage: document.getElementById("progress-stage")?.textContent || "",
+           start: document.getElementById("btn-start")?.textContent || "",
+         }))()`
+      )
+      .catch(() => null);
+    if (!live) {
+      status = "gone";
+      break;
+    }
+    if (live.estimate.includes("导出完成") || live.start === "在文件夹中显示") {
+      status = live.estimate;
+      break;
+    }
+    if (live.stage === "需要注意") {
+      status = "failed (stage=需要注意)";
+      break;
+    }
+  }
+  console.log(`[topbar-export] renderer status: ${status}`);
+
+  /* Restore the destination preference before anything else observes it. */
+  if (previousExportLocation !== undefined) {
+    prefs.set("exportLocation", previousExportLocation);
+    previousExportLocation = undefined;
+  }
+
+  if (!fs.existsSync(target)) {
+    console.error("[topbar-export] FAIL: no output file was produced");
+    return;
+  }
+  const stat = await fsp.stat(target);
+  const duration = await exporter.probeDuration(target);
+  console.log(
+    `[topbar-export] ${target} · ${(stat.size / 1024 / 1024).toFixed(2)} MB · ${duration.toFixed(2)}s`
+  );
+  if (stat.size < 1024 || duration < 1) {
+    console.error("[topbar-export] FAIL: output looks invalid");
+  } else {
+    console.log("[topbar-export] FULL-RUN PASS");
+  }
 }
 
 /**
@@ -1411,7 +1492,8 @@ async function runTopbarExportProbe(editor) {
  * MP4 with ffmpeg. `DOGSC_EXPORT_TEST=1` turns the smoke run into a full
  * end-to-end check of the render → encode → mux pipeline.
  */
-async function runExportTest(win, outputDir) {  if (!win || win.isDestroyed()) return;
+async function runExportTest(win, outputDir) {
+  if (!win || win.isDestroyed()) return;
   const target = path.join(outputDir, "export-check.mp4");
   await fsp.rm(target, { force: true });
   /* The check is short by default; a longer one exercises the chunked write
@@ -1422,8 +1504,12 @@ async function runExportTest(win, outputDir) {  if (!win || win.isDestroyed()) r
     /* Reproduce the user's path exactly: whatever the panel is set to, with the
        full timeline and the editor's range. The panel seeds its folder from the
        preference, so it is pointed at the output directory for the run and put
-       back afterwards — a test must never leave the user exporting elsewhere. */
-    previousExportLocation = prefs.get("exportLocation");
+       back afterwards — a test must never leave the user exporting elsewhere.
+       The save happens only once: the smoke flow may already have stashed the
+       user's value, and overwriting it here would make the restore a no-op. */
+    if (previousExportLocation === undefined) {
+      previousExportLocation = prefs.get("exportLocation");
+    }
     prefs.set("exportLocation", outputDir);
     await win.webContents.executeJavaScript(`document.getElementById("btn-start").click(), true`);
   } else {
