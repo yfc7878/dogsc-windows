@@ -207,7 +207,11 @@ function buildTopBar() {
   exportButton.id = "btn-export";
   exportButton.innerHTML = `${icon("export", 15)}<span>${t("导出")}</span>`;
   attachTooltip(exportButton, t("导出成片（⌘E）"));
-  exportButton.addEventListener("click", openExport);
+  /* `openExport(range)` takes an optional export range — handing the listener
+     the click event itself made the panel read `event.end - event.start` as
+     the duration (NaN) and treat the event as a range, which rebased every
+     clip timestamp onto NaN and produced a black, un-exportable sheet. */
+  exportButton.addEventListener("click", () => openExport());
 
   const help = topButton("help", t("快捷键"), () => showShortcuts());
   const theme = topButton("sun", t("切换深色 / 浅色外观"), async () => {
@@ -1056,6 +1060,10 @@ async function runCommand(command) {
 
 function openExport(range) {
   if (!store.document) return;
+  /* Defence in depth for the listener mix-up above: any truthy argument that
+     is not a real {start, end} range is dropped here, so a stray event object
+     can never poison the payload again. */
+  if (range && (!Number.isFinite(range.start) || !Number.isFinite(range.end))) range = null;
   const document_ = JSON.parse(JSON.stringify(stripDocument(store.document)));
   api.windows.openExport({
     packagePath: store.packagePath,

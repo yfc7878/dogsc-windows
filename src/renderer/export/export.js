@@ -177,7 +177,13 @@ function documentForRange(document_, range) {
 async function init(payload) {
   state.payload = payload;
   state.document = normalizeDocument(payload.document);
-  state.range = payload.range || null;
+  /* Only a well-formed {start, end} range is honoured: a malformed one (an
+     event object serialized to `{}` used to slip through) would rebase every
+     clip timestamp onto NaN — black preview, NaN duration, zero frames. */
+  state.range =
+    payload.range && Number.isFinite(payload.range.start) && Number.isFinite(payload.range.end)
+      ? payload.range
+      : null;
   if (state.range) {
     state.document = documentForRange(state.document, state.range);
   }
@@ -545,6 +551,12 @@ async function start() {
 
     const size = targetSize();
     const duration = timelineDuration(state.document);
+    /* A NaN/0 duration means the sheet was seeded with a broken document;
+       encoding it would only ever produce an empty stream, so fail fast with
+       something the user can act on instead. */
+    if (!Number.isFinite(duration) || duration <= 0) {
+      throw new Error(t("时间线时长无效，请关闭导出窗口后重试"));
+    }
     const codec = await pickCodec(size, state.fps);
     state.codec = codec;
 

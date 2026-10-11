@@ -72,7 +72,13 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-if (!app.requestSingleInstanceLock()) {
+/* A parallel smoke instance (`DOGSC_ALLOW_MULTI=1` + `DOGSC_USER_DATA=<dir>`)
+   can run beside the user's real app: the single-instance lock is skipped and
+   the profile is isolated so the two never share preferences or caches. */
+if (process.env.DOGSC_USER_DATA) {
+  app.setPath("userData", process.env.DOGSC_USER_DATA);
+}
+if (process.env.DOGSC_ALLOW_MULTI !== "1" && !app.requestSingleInstanceLock()) {
   app.quit();
   process.exit(0);
 }
@@ -910,6 +916,9 @@ async function runSmokeTest(outputDir, projectPath) {
     if (process.env.DOGSC_EDIT_TEST) {
       await runEditTest(editor);
     }
+    if (process.env.DOGSC_TOPBAR_EXPORT_PROBE) {
+      await runTopbarExportProbe(editor);
+    }
 
     const document_ = JSON.parse(await fsp.readFile(path.join(projectPath, "project.json"), "utf8"));
     const media = {};
@@ -1362,12 +1371,47 @@ async function runRecordingTest(outputDir) {
 }
 
 /**
+ * Reproduces the top-bar export path: clicking the editor's own 导出 button,
+ * then reading what the export sheet actually seeded. The original bug was the
+ * click handler passing the event object into `openExport(range)`, which
+ * rebased the document onto NaN — black preview, NaN duration, zero frames.
+ */
+async function runTopbarExportProbe(editor) {
+  if (!editor || editor.isDestroyed()) return;
+  console.log("[topbar-export] clicking the editor's export button…");
+  await editor.webContents.executeJavaScript(
+    `document.getElementById("btn-export")?.click(), true`
+  );
+  /* The panel opens in its own window; give it a moment to boot and seed. */
+  await new Promise((resolve) => setTimeout(resolve, 6000));
+  const panel = windows.get("exportPanel");
+  if (!panel || panel.isDestroyed()) {
+    console.error("[topbar-export] FAIL: the export panel did not open");
+    return;
+  }
+  const probe = await panel.webContents
+    .executeJavaScript(
+      `(() => ({
+         fileName: document.getElementById("file-name")?.value ?? null,
+         duration: document.getElementById("spec-duration")?.textContent ?? null,
+         resolution: document.getElementById("spec-size")?.textContent ?? null,
+       }))()`
+    )
+    .catch((error) => ({ error: String(error) }));
+  console.log("[topbar-export] panel state:", JSON.stringify(probe));
+  const ok =
+    probe &&
+    !String(probe.duration || "").includes("NaN") &&
+    String(probe.duration || "") !== "0:00";
+  console.log(`[topbar-export] ${ok ? "PASS" : "FAIL"}`);
+}
+
+/**
  * Drives a real export through the export window and verifies the resulting
  * MP4 with ffmpeg. `DOGSC_EXPORT_TEST=1` turns the smoke run into a full
  * end-to-end check of the render → encode → mux pipeline.
  */
-async function runExportTest(win, outputDir) {
-  if (!win || win.isDestroyed()) return;
+async function runExportTest(win, outputDir) {  if (!win || win.isDestroyed()) return;
   const target = path.join(outputDir, "export-check.mp4");
   await fsp.rm(target, { force: true });
   /* The check is short by default; a longer one exercises the chunked write
