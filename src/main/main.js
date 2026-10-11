@@ -15,6 +15,7 @@ const path = require("path");
 const fs = require("fs");
 const fsp = require("fs/promises");
 const { pathToFileURL } = require("url");
+const { Readable } = require("stream");
 const {
   app,
   ipcMain,
@@ -257,8 +258,9 @@ app.whenReady().then(async () => {
     if (!filePath) return new Response("", { status: 404 });
     /* pathToFileURL percent-encodes spaces and non-ASCII characters, which
        net.fetch requires; a hand-built `file://` string fails on any project
-       whose name contains a space. */
-    return net.fetch(pathToFileURL(filePath).toString());
+       whose name contains a space. Media needs range-aware responses so the
+       renderer can seek — see fileResponse(). */
+    return fileResponse(filePath, request);
   });
 
   protocol.handle("app", (request) => {
@@ -919,6 +921,9 @@ async function runSmokeTest(outputDir, projectPath) {
     if (process.env.DOGSC_EDIT_TEST) {
       await runEditTest(editor);
     }
+    if (process.env.DOGSC_SEEK_PROBE) {
+      await runSeekProbe(editor);
+    }
     if (process.env.DOGSC_TOPBAR_EXPORT_PROBE) {
       await runTopbarExportProbe(editor, outputDir);
     }
@@ -1574,6 +1579,101 @@ async function runDragTest(win, name) {
   );
 }
 
+const MEDIA_MIME_TYPES = {
+  ".webm": "video/webm",
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".mov": "video/quicktime",
+  ".m4a": "audio/mp4",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+};
+
+function mimeTypeFor(filePath) {
+  return MEDIA_MIME_TYPES[path.extname(filePath).toLowerCase()] || "application/octet-stream";
+}
+
+/**
+ * Serves one file over the dogsc-media scheme with byte-range support.
+ *
+ * Chromium's media pipeline refuses to seek inside a resource whose server
+ * cannot answer range requests: the seekable range collapses to [0,0] and
+ * every `currentTime = t` assignment is silently clamped back to 0 (a
+ * "seeked" event still fires, which makes the failure look like a working
+ * seek). Playback is sequential and unaffected — which is exactly how the
+ * editor preview kept looking alive while every export froze on frame 0.
+ * Serving 206 slices fixes seeking in the editor, the export sheet and the
+ * filmstrip thumbnails alike.
+ */
+function fileResponse(filePath, request) {
+  let stat;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return new Response("Not found", { status: 404 });
+  }
+  if (!stat.isFile()) return new Response("Not found", { status: 404 });
+
+  const total = stat.size;
+  const type = mimeTypeFor(filePath);
+  const baseHeaders = {
+    "Content-Type": type,
+    "Accept-Ranges": "bytes",
+  };
+
+  if (request.method === "HEAD") {
+    return new Response(null, {
+      status: 200,
+      headers: { ...baseHeaders, "Content-Length": String(total) },
+    });
+  }
+
+  const rangeHeader = request.headers.get("range");
+  if (!rangeHeader) {
+    return new Response(Readable.toWeb(fs.createReadStream(filePath)), {
+      status: 200,
+      headers: { ...baseHeaders, "Content-Length": String(total) },
+    });
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
+  const unsatisfiable = () =>
+    new Response("Range not satisfiable", {
+      status: 416,
+      headers: { "Content-Range": `bytes */${total}` },
+    });
+  if (!match || (match[1] === "" && match[2] === "")) return unsatisfiable();
+  if (total === 0) return unsatisfiable();
+
+  let start;
+  let end;
+  if (match[1] === "") {
+    /* Suffix form: `bytes=-N` means the final N bytes. */
+    const suffix = parseInt(match[2], 10);
+    if (suffix === 0) return unsatisfiable();
+    start = Math.max(0, total - suffix);
+    end = total - 1;
+  } else {
+    start = parseInt(match[1], 10);
+    end = match[2] === "" ? total - 1 : Math.min(parseInt(match[2], 10), total - 1);
+  }
+  if (start >= total || end < start) return unsatisfiable();
+
+  return new Response(Readable.toWeb(fs.createReadStream(filePath, { start, end })), {
+    status: 206,
+    headers: {
+      ...baseHeaders,
+      "Content-Length": String(end - start + 1),
+      "Content-Range": `bytes ${start}-${end}/${total}`,
+    },
+  });
+}
+
 /**
  * Drives a real export through the export window and verifies the resulting
  * MP4 with ffmpeg. `DOGSC_EXPORT_TEST=1` turns the smoke run into a full
@@ -1641,6 +1741,115 @@ async function runExportTest(win, outputDir) {
     console.error("[export-test] output looks invalid");
   } else {
     console.log("[export-test] PASS");
+  }
+}
+
+/**
+ * Seeks the editor's screen video to several times and samples a center pixel
+ * after each seek. Export renders every frame purely through seeks, so this
+ * probe answers directly whether seeking actually moves the decoded picture
+ * over the dogsc-media protocol (playback does not exercise that path).
+ * `DOGSC_SEEK_PROBE=1` enables it.
+ */
+async function runSeekProbe(win) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    const result = await win.webContents.executeJavaScript(
+      `(async () => {
+         const out = {};
+         const video = window.__dogscStore?.media?.screen;
+         if (!video) return { error: "no screen video element" };
+         out.meta = {
+           readyState: video.readyState,
+           duration: Number(video.duration?.toFixed?.(3)),
+           size: [video.videoWidth, video.videoHeight],
+           networkState: video.networkState,
+         };
+         out.seekable = Array.from({ length: video.seekable?.length || 0 }, (_, i) => [
+           Number(video.seekable.start(i).toFixed(2)),
+           Number(video.seekable.end(i).toFixed(2)),
+         ]);
+         out.buffered = Array.from({ length: video.buffered?.length || 0 }, (_, i) => [
+           Number(video.buffered.start(i).toFixed(2)),
+           Number(video.buffered.end(i).toFixed(2)),
+         ]);
+         const canvas = document.createElement("canvas");
+         canvas.width = 32;
+         canvas.height = 18;
+         const ctx = canvas.getContext("2d", { willReadFrequently: true });
+         const sample = async (label, el, t) => {
+           const t0 = performance.now();
+           const how = await new Promise((resolve) => {
+             let settled = false;
+             el.addEventListener("seeked", () => {
+               settled = true;
+               resolve("seeked");
+             }, { once: true });
+             try {
+               el.currentTime = t;
+             } catch (error) {
+               settled = true;
+               resolve("throw:" + error.message);
+             }
+             setTimeout(() => {
+               if (!settled) resolve("timeout ct=" + el.currentTime);
+             }, 3000);
+           });
+           await new Promise((resolve) => requestAnimationFrame(resolve));
+           ctx.drawImage(el, 0, 0, 32, 18);
+           const d = ctx.getImageData(16, 9, 1, 1).data;
+           out[label] = {
+             how,
+             ms: Math.round(performance.now() - t0),
+             currentTime: Number(el.currentTime?.toFixed?.(3)),
+             pixel: [d[0], d[1], d[2]],
+           };
+         };
+         await sample("t0", video, 0);
+         await sample("t5", video, 5);
+         await sample("t8", video, 8);
+         await sample("back0", video, 0);
+         /* Control: the same bytes through a blob URL bypass the custom
+            protocol entirely. If the blob seeks, the protocol handler is at
+            fault; if it also snaps back, the webm itself is unseekable. */
+         try {
+           const response = await fetch(video.src);
+           const blob = await response.blob();
+           const blobVideo = document.createElement("video");
+           blobVideo.src = URL.createObjectURL(blob);
+           blobVideo.muted = true;
+           blobVideo.preload = "auto";
+           await new Promise((resolve) => {
+             blobVideo.addEventListener("loadeddata", resolve, { once: true });
+             blobVideo.addEventListener("error", resolve, { once: true });
+             setTimeout(resolve, 8000);
+           });
+           out.blobMeta = {
+             readyState: blobVideo.readyState,
+             duration: Number(blobVideo.duration?.toFixed?.(3)),
+             size: [blobVideo.videoWidth, blobVideo.videoHeight],
+           };
+           out.blobSeekable = Array.from({ length: blobVideo.seekable?.length || 0 }, (_, i) => [
+             Number(blobVideo.seekable.start(i).toFixed(2)),
+             Number(blobVideo.seekable.end(i).toFixed(2)),
+           ]);
+           await sample("blobT5", blobVideo, 5);
+         } catch (error) {
+           out.blobError = String(error?.message || error);
+         }
+         return out;
+       })()`
+    );
+    console.log("[seek-probe]", JSON.stringify(result));
+    const moved =
+      result &&
+      result.t5?.how === "seeked" &&
+      result.t8?.how === "seeked" &&
+      JSON.stringify(result.t5.pixel) !== JSON.stringify(result.t0.pixel) &&
+      JSON.stringify(result.t8.pixel) !== JSON.stringify(result.t0.pixel);
+    console.log(`[seek-probe] ${moved ? "PASS" : "FAIL"}`);
+  } catch (error) {
+    console.error("[seek-probe] failed:", error.message);
   }
 }
 
