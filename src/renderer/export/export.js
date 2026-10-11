@@ -481,13 +481,20 @@ async function renderPreview() {
 
 async function seekAll(time) {
   const sourceTime = sourceTimeAt(state.document, time);
+  const cameraOffset = state.document.media?.camera?.offset || 0;
   const videos = Object.values(state.media).filter(Boolean);
   /* A background video is part of the picture and has to follow the playhead
      just like the recorded media. */
   if (state.backgroundVideo && state.backgroundVideo.readyState >= 1) {
     videos.push(state.backgroundVideo);
   }
-  await Promise.all(videos.map((video) => seek(video, sourceTime)));
+  /* 摄像头轨有自己的启动时刻，按偏移取画面对应时刻的帧。 */
+  await Promise.all(
+    videos.map((video) => {
+      const target = video === state.media.camera ? Math.max(0, sourceTime - cameraOffset) : sourceTime;
+      return seek(video, target);
+    })
+  );
 }
 
 function seek(video, time) {

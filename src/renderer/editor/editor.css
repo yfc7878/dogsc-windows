@@ -107,6 +107,13 @@
   flex: none;
   width: 72px;
   padding: 8px;
+  /* The rail hugs its buttons and floats in the column, like the macOS
+     original's ViewThatFits rail. Stretching it to the full workspace height
+     left a dead white slab under the buttons, and its fixed-width buttons
+     overflowed the padded column by ~2px — which made the whole rail
+     horizontally scrollable with a stray scrollbar under it. */
+  align-self: center;
+  max-height: 100%;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -115,6 +122,13 @@
   border: 0.75px solid var(--hairline);
   box-shadow: 0 5px 14px var(--soft-shadow);
   overflow-y: auto;
+  overflow-x: hidden;
+}
+/* The original hides the scroll indicators on its scrollable compact rail;
+   the rail only ever scrolls on windows shorter than every button size. */
+.tool-rail::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .rail-button {
@@ -123,8 +137,12 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
-  width: 56px;
+  /* 100% of the padded column: the old fixed 56px was 1.5px wider than
+     72 − padding − border and produced the horizontal overflow. */
+  width: 100%;
   height: 52px;
+  /* ViewThatFits compact step: shrink from 52 to 38 before the rail scrolls. */
+  min-height: 38px;
   border: 0;
   border-radius: var(--radius-group);
   background: transparent;

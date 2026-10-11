@@ -143,9 +143,14 @@ npm start -- --disable-gpu
 
 ### 录制管线
 
-采集在隐藏窗口中进行，`MediaRecorder` 按 1 秒分片持续把编码结果写入主进程，因此长时间录制不会占用内存，意外中断也已保留已写入的素材。系统声音从桌面源的 loopback 轨道单独录制。
+**屏幕采集有两条路径，自动择一：**
 
-录制完成后会用 `ffmpeg -c copy` 重封装 WebM——`MediaRecorder` 不会回填时长，重封装后文件才是完整的。
+- **ffmpeg ddagrab（首选，显示器与区域录制）**：Desktop Duplication 恒定帧率采集、不录系统光标，硬件 H.264 直录（NVENC → Media Foundation → AMF → x264 逐个实测择优），录制中写裸流、停止后重封装 MP4。第一帧的系统时钟作为全项目时间原点：指针轨重定基、系统声音 / 麦克风 / 摄像头按各自的启动时刻写入 `offset` 偏移，导出时自动补偿对齐。
+- **Chromium 采集（窗口、设备来源，以及 ddagrab 不可用时的自动回退）**：隐藏窗口中的 `MediaRecorder` 按 1 秒分片持续把编码结果写入主进程，长时间录制不占内存。此路径保持原行为（无偏移字段）。
+
+启动时会做 ddagrab 能力实测（滤镜存在 + 主输出真实抓帧），远程会话、虚拟显示或部分混合显卡机器上会自动走 Chromium 路径，录制功能不受影响。
+
+录制完成后会用 `ffmpeg -c copy` 重封装——`MediaRecorder` 不会回填时长，重封装后文件才是完整的。
 
 ### 导出管线
 
@@ -178,6 +183,8 @@ MyCapture.dogscproject/
 | 变量 | 作用 |
 | --- | --- |
 | `DOGSC_SOFTWARE_RENDER=1` | 关闭硬件加速（显卡驱动异常时使用） |
+| `DOGSC_LEGACY_RECORD=1` | 强制使用旧的 Chromium 采集路径（诊断用） |
+| `DOGSC_DDAGRAB_LAB=1` | 运行 ffmpeg ddagrab 采集链路的分级诊断并输出完整 stderr |
 | `DOGSC_FAKE_MEDIA=1` | 让 Chromium 暴露一个虚拟摄像头，便于在没有摄像头的机器上验证设备录制 |
 | `DOGSC_SMOKE=<目录>` | 依次打开全部窗口并截图到该目录，然后退出 |
 | `DOGSC_RECORD_TEST=1` | 在诊断模式中真实录制 6 秒主显示器并校验产物 |
@@ -220,6 +227,7 @@ node tools/probe-pointer.js
 ## 已知限制
 
 - **窗口录制**：Chromium 通过 Windows Graphics Capture 采集单个窗口，**需要可用的 GPU**。禁用硬件加速时（`--disable-gpu`）采集器会报告显示器尺寸而非窗口尺寸，并且一帧都不投递——本仓库的 `DOGSC_WINDOW_TEST` 在此环境下会如实标记为跳过。此外，窗口最小化或被完全遮挡时同样收不到画面。以上情况都会明确提示「录制期间没有收到任何画面」，而不是给你一个空项目。
+- **屏幕采集（ffmpeg 路径）**：远程桌面会话、虚拟显示或部分混合显卡的机器上 Desktop Duplication（ddagrab）不可用——启动时会实测，不可用时自动回退 Chromium 采集，功能与旧版本一致。
 - **`悬浮球` 一类的分层/透明悬浮窗**无法被采集，会返回 `NotReadableError`。选择窗口时请避开这类窗口。
 - **设备录制**在 Windows 上没有 ScreenCaptureKit 的对应能力，实现为「直接采集所选设备作为主画面」。此时不记录桌面光标轨，也不生成额外的画中画轨——因为画面本身不是桌面，桌面坐标映射过去没有意义。
 - 本机无摄像头时可加 `DOGSC_FAKE_MEDIA=1` 用虚拟设备验证这条路径。

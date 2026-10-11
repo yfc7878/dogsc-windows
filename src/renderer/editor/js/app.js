@@ -1294,11 +1294,13 @@ window.__dogscRenderProbe = (times) => {
 /** Parks the recorded media on `time` so a probe frame is deterministic. */
 function parkMediaAt(time) {
   const sourceTime = store.sourceTime(time);
+  const doc = store.document;
   for (const role of ["screen", "camera"]) {
     const video = store.media[role];
     if (!video) continue;
+    const offset = role === "camera" ? doc?.media?.camera?.offset || 0 : 0;
     try {
-      video.currentTime = sourceTime;
+      video.currentTime = Math.max(0, sourceTime - offset);
     } catch {
       /* seeking before metadata is ready */
     }
