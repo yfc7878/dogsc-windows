@@ -50,12 +50,13 @@
         "to": "scripts/desktop-icons.ps1"
       }
     ],
-    "win": {
-      "target": [
-        "portable"
-      ],
-      "icon": "resources/icon.ico"
-    },
+  "win": {
+    "target": [
+      "portable",
+      "nsis"
+    ],
+    "icon": "resources/icon.ico"
+  },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
