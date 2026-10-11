@@ -1116,9 +1116,10 @@ export function syncMedia(playing) {
     }
   }
   const camera = store.media.camera;
-  if (camera && Math.abs((camera.currentTime || 0) - sourceTime) > 0.12) {
+  const cameraTime = Math.max(0, sourceTime - (doc.media?.camera?.offset || 0));
+  if (camera && Math.abs((camera.currentTime || 0) - cameraTime) > 0.12) {
     try {
-      camera.currentTime = sourceTime;
+      camera.currentTime = cameraTime;
     } catch {
       /* same */
     }
@@ -1127,13 +1128,15 @@ export function syncMedia(playing) {
   for (const role of ["system", "microphone"]) {
     const audio = store.media[role];
     if (!audio) continue;
+    /* 音轨有自己的启动时刻：按偏移对齐到画面时间轴。 */
+    const trackTime = Math.max(0, sourceTime - (doc.media?.[role]?.offset || 0));
     const muted = role === "system" ? doc.audio.isSystemMuted : doc.audio.isMicrophoneMuted;
     const volume = role === "system" ? doc.audio.systemVolume : doc.audio.microphoneVolume;
     audio.volume = muted ? 0 : volume;
     if (playing) {
-      if (Math.abs((audio.currentTime || 0) - sourceTime) > 0.25) {
+      if (Math.abs((audio.currentTime || 0) - trackTime) > 0.25) {
         try {
-          audio.currentTime = sourceTime;
+          audio.currentTime = trackTime;
         } catch {
           /* same */
         }

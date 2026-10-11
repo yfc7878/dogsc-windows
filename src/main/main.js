@@ -39,6 +39,7 @@ const { WindowManager } = require("./windows");
 const { PointerTracker, physicalRectForDisplay } = require("./input-hook");
 const projectIO = require("./project");
 const exporter = require("./exporter");
+const screenCapture = require("./screen-capture");
 const desktopIcons = require("./desktop-icons");
 
 const RESOURCES = path.join(__dirname, "..", "..", "resources");
@@ -253,6 +254,15 @@ app.on("second-instance", (_event, argv) => {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
+
+  /* 预热 ffmpeg 采集：能力探测与编码器试编在后台完成，首次录制不必等。 */
+  screenCapture.warmup().then((encoder) => {
+    if (encoder) console.log(`[capture] ffmpeg ddagrab ready — ${encoder.label}`);
+    else console.log("[capture] ffmpeg ddagrab unavailable — using Chromium capture");
+  });
+  if (process.env.DOGSC_DDAGRAB_LAB) {
+    screenCapture.diagnose().catch((error) => console.error("[ddagrab-lab] failed", error.message));
+  }
 
   protocol.handle("dogsc-media", (request) => {
     const url = new URL(request.url);
@@ -1325,7 +1335,12 @@ async function runAreaTest(outputDir) {
 async function runRecordingTest(outputDir) {
   const displays = screen.getAllDisplays();
   const display = displays.find((entry) => entry.id === screen.getPrimaryDisplay().id) || displays[0];
-  const sources = await desktopCapturer.getSources({ types: ["screen"] });
+  /* 1×1 缩略图：真实缩略图抓取会让 Chromium 短暂占用桌面复制会话，
+     与随后的 ffmpeg ddagrab 采集撞车（应用内的列表也走 1×1）。 */
+  const sources = await desktopCapturer.getSources({
+    types: ["screen"],
+    thumbnailSize: { width: 1, height: 1 },
+  });
   const source = sources.find((entry) => String(entry.display_id) === String(display.id)) || sources[0];
   if (!source) {
     console.error("[record-test] no screen source available");
@@ -1346,6 +1361,11 @@ async function runRecordingTest(outputDir) {
     cursorStyle: { size: 2.5 },
   });
 
+  /* 排障：在录制同一时刻重跑 ddagrab 实验室（DOGSC_DDAGRAB_LAB=1）。 */
+  if (process.env.DOGSC_DDAGRAB_LAB) {
+    await screenCapture.diagnose().catch(() => {});
+  }
+
   const started = await startRecording({
     kind: "display",
     sourceId: source.id,
@@ -1356,8 +1376,7 @@ async function runRecordingTest(outputDir) {
     systemAudio: true,
     microphone: null,
     camera: null,
-  });
-  console.log("[record-test] start:", JSON.stringify(started));
+  });  console.log("[record-test] start:", JSON.stringify(started));
   if (!started?.ok) {
     prefs.set("projectLocation", previousLocation);
     return;
@@ -2493,11 +2512,19 @@ async function startRecording(config) {
   };
 
   const surface = windows.createCaptureSurface();
+  /* 采集面的日志平时在它自己的渲染进程里；窗口级转发让录制排障可见
+     （DOGSC_SMOKE / DOGSC_DDAGRAB_LAB 时开启）。 */
+  if (process.env.DOGSC_SMOKE || process.env.DOGSC_DDAGRAB_LAB) {
+    surface.webContents.on("console-message", (_event, _level, message) => {
+      console.log("[surface]", message);
+    });
+  }
   const ready = await waitForSurface(surface);
   if (!ready) {
     session = null;
     return { ok: false, reason: "surface-failed" };
   }
+  if (process.env.DOGSC_DDAGRAB_LAB) await screenCapture.probeDdagrab("A-采集面创建后");
 
   if (prefs.get("hideDesktopIcons")) {
     await desktopIcons.setDesktopIconsHidden(true);
@@ -2510,10 +2537,46 @@ async function startRecording(config) {
     await pointer.startCapture(physicalRectForDisplay(displayId));
   }
   registerMarkerShortcut();
+  if (process.env.DOGSC_DDAGRAB_LAB) {
+    await screenCapture.probeDdagrab("B-指针钩子启动后");
+    await screenCapture.probeDdagrabDeep("D-录制前逐级", workingDir);
+  }
+
+  /* 高性能采集：显示器与区域录制优先走 ffmpeg ddagrab（Desktop Duplication，
+     恒定帧率、不录系统光标、硬件编码）。启动失败（无滤镜 / 编码器不可用 /
+     首帧超时）时自动回退 Chromium 采集，不影响任何既有能力。窗口与设备
+     来源保持 Chromium 路径。 */
+  let screenMode = "legacy";
+  if (!isDevice && config.kind !== "window") {
+    try {
+      if (await screenCapture.available()) {
+        const display =
+          screen.getAllDisplays().find((item) => String(item.id) === String(config.displayId)) ||
+          screen.getPrimaryDisplay();
+        const physical = screen.dipToScreenRect(null, display.bounds);
+        const handle = await screenCapture.begin({
+          displayId: config.displayId || String(screen.getPrimaryDisplay().id),
+          region: config.kind === "area" ? config.region : null,
+          scaleFactor: config.scaleFactor || display.scaleFactor || 1,
+          fps: config.fps || 60,
+          width: physical.width,
+          height: physical.height,
+          workingDir,
+          onStderr: (text) => console.log("[capture:ffmpeg]", text.trim()),
+        });
+        session.screenCapture = handle;
+        screenMode = "ffmpeg";
+        console.log(`[capture] ffmpeg screen capture — ${handle.encoder}`);
+      }
+    } catch (error) {
+      console.warn("[capture] ffmpeg capture unavailable, falling back to Chromium:", error.message);
+      session.screenCapture = null;
+    }
+  }
 
   send("captureSurface", "capture:command", {
     type: "start",
-    config: { ...config, workingDir },
+    config: { ...config, workingDir, screenMode },
   });
 
   send("recorder", "recorder:state", sessionState());
@@ -2531,6 +2594,7 @@ async function startRecording(config) {
     pointer.stopCapture();
     pointer.stop();
     globalShortcut.unregister(MARKER_ACCELERATOR);
+    if (session?.screenCapture) await session.screenCapture.cancel().catch(() => {});
     session = null;
     send("recorder", "recorder:state", { status: "idle" });
     send("captureSurface", "capture:command", { type: "stop" });
@@ -2545,6 +2609,10 @@ function pauseRecording() {
   if (!session) return { ok: false, reason: "no-session" };
   session.paused = true;
   session.pausedAt = Date.now();
+  /* ffmpeg 采集按分段暂停：优雅结束当前段，继续时再开新段。 */
+  if (session.screenCapture) {
+    session.screenCapture.pause().catch((error) => console.warn("[capture] ffmpeg pause failed", error.message));
+  }
   send("captureSurface", "capture:command", { type: "pause" });
   send("recorder", "recorder:state", sessionState());
   return { ok: true };
@@ -2555,6 +2623,12 @@ function resumeRecording() {
   if (session.pausedAt) session.pausedTotal += Date.now() - session.pausedAt;
   session.paused = false;
   session.pausedAt = 0;
+  if (session.screenCapture) {
+    session.screenCapture.resume().catch((error) => {
+      console.warn("[capture] ffmpeg resume failed", error.message);
+      send("recorder", "recorder:warning", { message: "screen-resume-failed" });
+    });
+  }
   send("captureSurface", "capture:command", { type: "resume" });
   send("recorder", "recorder:state", sessionState());
   return { ok: true };
@@ -2595,6 +2669,7 @@ async function stopRecording(cancel) {
   session.finishing = true;
 
   const workingDir = session.workingDir;
+  const ffmpegCapture = session.screenCapture || null;
   const captured = await requestSurfaceStop();
   const pointerTrack = pointer.stopCapture();
   pointer.stop();
@@ -2611,11 +2686,22 @@ async function stopRecording(cancel) {
   send("recorder", "recorder:state", { status: "idle" });
 
   if (cancel) {
+    if (ffmpegCapture) await ffmpegCapture.cancel().catch(() => {});
     await fsp.rm(workingDir, { recursive: true, force: true }).catch(() => {});
     return { ok: true, cancelled: true };
   }
 
-  if (!captured || !captured.files || !captured.files.screen) {
+  /* 收尾 ffmpeg 采集：停止编码 → 逐段重封装 → 拼接 → 抽首帧封面。 */
+  let screenMedia = null;
+  if (ffmpegCapture) {
+    try {
+      screenMedia = await ffmpegCapture.finish();
+    } catch (error) {
+      console.error("[capture] ffmpeg finish failed", error);
+    }
+  }
+
+  if (!captured || !captured.files || (!captured.files.screen && !screenMedia)) {
     await fsp.rm(workingDir, { recursive: true, force: true }).catch(() => {});
     return { ok: false, reason: captured?.error || "no-video" };
   }
@@ -2623,11 +2709,23 @@ async function stopRecording(cancel) {
   /* A window that is minimised or fully occluded yields no frames at all —
      Chromium only delivers them while the source is on screen and repainting.
      Without this check the user would get an empty project and no explanation. */
-  if (!written.screen) {
+  if (!written.screen && !screenMedia) {
     send("recorder", "recorder:warning", { message: "no-frames-captured" });
   }
 
-  const record = await buildProjectFromSession(captured, pointerTrack, markers, config);
+  /* ffmpeg 采集的封面（首帧 png）由主进程从成片抽出，替代渲染层的截图。 */
+  const merged = {
+    ...captured,
+    screenMode: captured.screenMode || (screenMedia ? "ffmpeg" : "legacy"),
+    screenMedia,
+    trackStartedAt: captured.trackStartedAt || {},
+  };
+  if (screenMedia) {
+    const poster = path.join(workingDir, "poster.png");
+    if (fs.existsSync(poster)) merged.posterPath = poster;
+  }
+
+  const record = await buildProjectFromSession(merged, pointerTrack, markers, config);
 
   windows.createCompletion({
     packagePath: record.packagePath,
@@ -2677,7 +2775,26 @@ async function buildProjectFromSession(captured, pointerTrack, markers, config) 
   await ensureDir(packagePath);
 
   const media = {};
-  for (const role of ["screen", "camera", "system", "microphone"]) {
+  const firstFrameTime = captured.screenMedia?.firstFrameTime;
+
+  if (captured.screenMedia) {
+    /* ffmpeg 采集的屏幕素材已经是规范的 H.264 MP4，直接采用。 */
+    const relative = await projectIO.adoptMedia(packagePath, captured.screenMedia.file, "screen");
+    const absolute = path.join(packagePath, relative);
+    media.screen = {
+      path: relative,
+      duration: captured.screenMedia.duration || 0,
+      size: fs.statSync(absolute).size,
+      width: captured.screenMedia.width || null,
+      height: captured.screenMedia.height || null,
+    };
+  }
+
+  /* 屏幕走旧 Chromium 采集时（含 ffmpeg 回退），screen.webm 照常采用。 */
+  const trackRoles = captured.screenMedia
+    ? ["camera", "system", "microphone"]
+    : ["screen", "camera", "system", "microphone"];
+  for (const role of trackRoles) {
     const file = captured.files[role];
     if (!file || !fs.existsSync(file)) continue;
     const relative = await projectIO.adoptMedia(packagePath, file, role);
@@ -2692,6 +2809,29 @@ async function buildProjectFromSession(captured, pointerTrack, markers, config) 
       width: captured.sizes?.[role]?.width || null,
       height: captured.sizes?.[role]?.height || null,
     };
+  }
+
+  /* 附加轨对齐到画面原点（ffmpeg 首帧时钟）：offset 是该轨晚于画面的启动
+     秒数，导出与预览都按它平移音轨与摄像头画面。 */
+  const started = captured.trackStartedAt || {};
+  if (captured.screenMedia && Number.isFinite(firstFrameTime)) {
+    for (const role of ["camera", "system", "microphone"]) {
+      if (media[role] && Number.isFinite(started[role])) {
+        media[role].offset = started[role] / 1000 - firstFrameTime;
+      }
+    }
+  }
+
+  /* 指针轨重定基到画面原点：sample.t 是钩子启动以来的秒数，加上两原点的
+     差即得相对首帧的秒数（旧采集路径保持原样，避免改变已验证行为）。 */
+  let pointerSamples = pointerTrack.samples;
+  let pointerClicks = pointerTrack.clicks;
+  if (captured.screenMedia && Number.isFinite(firstFrameTime) && Number.isFinite(pointerTrack.originMs)) {
+    const delta = pointerTrack.originMs / 1000 - firstFrameTime;
+    if (Math.abs(delta) > 0.001) {
+      pointerSamples = pointerSamples.map((sample) => ({ ...sample, t: sample.t + delta }));
+      pointerClicks = pointerClicks.map((click) => ({ ...click, t: click.t + delta }));
+    }
   }
 
   let posterUrl = null;
@@ -2723,8 +2863,8 @@ async function buildProjectFromSession(captured, pointerTrack, markers, config) 
     },
     media,
     pointerTrack: {
-      samples: pointerTrack.samples,
-      clicks: pointerTrack.clicks,
+      samples: pointerSamples,
+      clicks: pointerClicks,
     },
     markers,
     timeline: {

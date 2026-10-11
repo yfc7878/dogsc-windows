@@ -134,14 +134,35 @@ function buildAudioGraph(document, tracks) {
   const labels = [];
 
   const sources = [
-    { key: "system", file: tracks.system, volume: document.audio?.systemVolume ?? 0.82, muted: document.audio?.isSystemMuted },
-    { key: "microphone", file: tracks.microphone, volume: document.audio?.microphoneVolume ?? 0.9, muted: document.audio?.isMicrophoneMuted },
+    {
+      key: "system",
+      file: tracks.system,
+      volume: document.audio?.systemVolume ?? 0.82,
+      muted: document.audio?.isSystemMuted,
+      offset: document.media?.system?.offset || 0,
+    },
+    {
+      key: "microphone",
+      file: tracks.microphone,
+      volume: document.audio?.microphoneVolume ?? 0.9,
+      muted: document.audio?.isMicrophoneMuted,
+      offset: document.media?.microphone?.offset || 0,
+    },
   ].filter((source) => source.file && !source.muted);
 
   let inputIndex = 0;
   for (const source of sources) {
     inputs.push(source.file);
     const index = inputIndex++;
+    /* 轨相对画面原点的偏移：晚启动的轨道补静音，早启动的裁掉头部，
+       之后各段 atrim 才能按屏幕时间线取素材。 */
+    const offset = Number(source.offset) || 0;
+    const align =
+      offset >= 0.001
+        ? [`adelay=${Math.round(offset * 1000)}:all=1`]
+        : offset <= -0.001
+          ? [`atrim=start=${(-offset).toFixed(6)}`, "asetpts=PTS-STARTPTS"]
+          : [];
     const parts = [];
     const segLabels = [];
     clips.forEach((clip, clipIndex) => {
@@ -150,7 +171,8 @@ function buildAudioGraph(document, tracks) {
       const label = `a${index}_${clipIndex}`;
       // Each trimmed span restarts its own PTS so concat sees clean segments.
       parts.push(
-        `[${index}:a]atrim=start=${start.toFixed(4)}:end=${(start + length).toFixed(4)},` +
+        `[${index}:a]${align.length ? align.join(",") + "," : ""}` +
+          `atrim=start=${start.toFixed(4)}:end=${(start + length).toFixed(4)},` +
           `asetpts=PTS-STARTPTS[${label}]`
       );
       segLabels.push(`[${label}]`);

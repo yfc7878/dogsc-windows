@@ -35,6 +35,8 @@ const state = {
   writing: [],
   sizes: {},
   durations: {},
+  trackStartedAt: {},
+  screenMode: "legacy",
   startedAt: 0,
   paused: false,
   stopping: false,
@@ -81,7 +83,6 @@ async function acquireDesktop(config) {
     chromeMediaSourceId: config.sourceId,
   };
   const audio = { mandatory: { ...base } };
-
   const attempts = [];
   if (config.systemAudio) {
     attempts.push({
@@ -118,6 +119,25 @@ async function acquireDesktop(config) {
     }
   }
   throw lastError || new Error("desktop capture failed");
+}
+
+/**
+ * 系统声音（WASAPI 回环）。ffmpeg 采集模式下屏幕不再经过 Chromium，但回环
+ * 音频仍要从桌面源取得。
+ *
+ * 不用"纯音频请求"：实测在部分版本上它既不返回也不报错（挂起），会拖死
+ * 采集面的启动；统一用"最小视频轨 + 音频"的请求（与旧采集路径同一套已被
+ * 验证的约束），视频轨只负责把音频带出来，帧率尺寸都压到最低，不会被录制。
+ */
+async function acquireSystemAudio(config) {
+  const base = { chromeMediaSource: "desktop", chromeMediaSourceId: config.sourceId };
+  return Promise.race([
+    navigator.mediaDevices.getUserMedia({
+      audio: { mandatory: { ...base } },
+      video: { mandatory: { ...base, maxFrameRate: 5, maxWidth: 320, maxHeight: 180 } },
+    }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("system-audio-timeout")), 8000)),
+  ]);
 }
 
 /**
@@ -274,6 +294,8 @@ function startRecorder(role, stream, kind, { extension = ".webm", videoBitsPerSe
   };
 
   recorder.start(1000);
+  /* 墙钟锚点：主进程用它把每条附加轨对齐到屏幕画面（ffmpeg 首帧时钟）。 */
+  state.trackStartedAt[role] = Date.now();
   state.recorders.set(role, recorder);
   state.writing.push(role);
   return recorder;
@@ -293,6 +315,9 @@ async function start(config) {
   state.stopping = false;
   state.writing = [];
   state.pendingWrites = [];
+  state.trackStartedAt = {};
+  state.screenMode = config.screenMode === "ffmpeg" ? "ffmpeg" : "legacy";
+  const ffmpegScreen = state.screenMode === "ffmpeg";
 
   const isDevice = config.kind === "device";
 
@@ -300,6 +325,19 @@ async function start(config) {
   if (isDevice) {
     screenStream = await acquireDevice(config);
     state.deviceStream = screenStream;
+  } else if (ffmpegScreen) {
+    /* 屏幕由主进程的 ffmpeg（ddagrab）采集；这里只为系统声音取回环音频，
+       桌面流本身不会被录制。音频拿不到时只降级该轨，不动整场录制。 */
+    console.warn("[capture] ffmpeg-mode start: acquiring system audio", Boolean(config.systemAudio));
+    if (config.systemAudio) {
+      try {
+        state.desktopStream = await acquireSystemAudio(config);
+      } catch (error) {
+        console.warn("[capture] system audio unavailable", error?.name);
+        await api.capture.warning({ message: "system-audio-unavailable" });
+      }
+    }
+    console.warn("[capture] ffmpeg-mode start: desktopStream =", Boolean(state.desktopStream));
   } else {
     const desktop = await acquireDesktop(config);
     state.desktopStream = desktop;
@@ -311,8 +349,10 @@ async function start(config) {
     }
   }
 
-  measureStream(screenStream, "screen");
-  startRecorder("screen", screenStream, "video", { videoBitsPerSecond: 12000000 });
+  if (!ffmpegScreen) {
+    measureStream(screenStream, "screen");
+    startRecorder("screen", screenStream, "video", { videoBitsPerSecond: 12000000 });
+  }
 
   /* A device recording already uses the capture device as the main picture, so
      there is nothing separate to record for the picture-in-picture track. */
@@ -357,6 +397,8 @@ function resume() {
 }
 
 async function grabPoster() {
+  /* ffmpeg 采集模式下屏幕画面不在本进程里，封面由主进程从成片抽首帧。 */
+  if (state.screenMode === "ffmpeg") return null;
   const video = state.cropVideo || findPreviewVideo();
   if (!video) return null;
   const canvas = document.createElement("canvas");
@@ -432,6 +474,8 @@ async function stop() {
     markers: [],
     config: state.config,
     suggestedName: state.config.suggestedName || null,
+    screenMode: state.screenMode,
+    trackStartedAt: { ...state.trackStartedAt },
   });
 }
 

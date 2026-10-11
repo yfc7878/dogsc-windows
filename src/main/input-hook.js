@@ -222,11 +222,14 @@ class PointerTracker {
       y: (c.y - origin.y) / height,
     }));
 
+    const originMs = this.originMs;
     this.samples = [];
     this.clicks = [];
     this.displayRect = null;
     this.originMs = 0;
-    return { samples, clicks, duration };
+    /* originMs is the wall-clock start of the track: the screen-capture
+       pipeline rebases samples onto the video's own time origin with it. */
+    return { samples, clicks, duration, originMs };
   }
 
   now() {
