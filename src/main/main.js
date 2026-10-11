@@ -933,6 +933,9 @@ async function runSmokeTest(outputDir, projectPath) {
     const editor = windows.createEditor({ projectPath });
     await shoot("04-editor", editor, 7000);
     await dumpDiagnostics(editor, "editor");
+    if (process.env.DOGSC_LAYOUT_PROBE) {
+      await runLayoutProbe(editor);
+    }
     /* A smoke run must never leave the user's project modified. The editor
        autosaves every 20 seconds (and again on unload) whenever the store is
        dirty, so a probe that commits — even one that undoes afterwards — could
@@ -2450,6 +2453,72 @@ async function dumpDiagnostics(win, name) {
   } catch (error) {
     console.error(`[smoke:${name}] diagnostics failed:`, error.message);
   }
+}
+
+/**
+ * Layout probe (`DOGSC_LAYOUT_PROBE=1`): walks the editor DOM for
+ * horizontally scrollable and viewport-overflowing elements, at the default
+ * size and again shrunk near the minimum — the state where the tool rail used
+ * to sprout a horizontal scrollbar, leaving a stray white block below it.
+ */
+async function runLayoutProbe(win) {
+  if (!win || win.isDestroyed()) return;
+  const measure = () =>
+    win.webContents.executeJavaScript(`(() => {
+      const describe = (el) => {
+        if (el.id) return "#" + el.id;
+        if (typeof el.className === "string" && el.className) {
+          return "." + el.className.trim().split(/\\s+/).slice(0, 2).join(".");
+        }
+        return el.tagName.toLowerCase();
+      };
+      const out = {
+        viewport: [window.innerWidth, window.innerHeight],
+        page: {
+          doc: [document.documentElement.scrollWidth, document.documentElement.clientWidth],
+          body: [document.body.scrollWidth, document.body.clientWidth],
+        },
+        horizontalScrollers: [],
+        overflowing: [],
+      };
+      document.querySelectorAll("*").forEach((el) => {
+        const style = getComputedStyle(el);
+        if (el.scrollWidth > el.clientWidth + 0.5 && /(auto|scroll)/.test(style.overflowX)) {
+          out.horizontalScrollers.push({
+            el: describe(el),
+            scroll: el.scrollWidth,
+            client: el.clientWidth,
+            offset: el.offsetWidth,
+          });
+        }
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 0.5 && (rect.right > window.innerWidth + 0.5 || rect.left < -0.5)) {
+          out.overflowing.push({
+            el: describe(el),
+            left: Math.round(rect.left),
+            right: Math.round(rect.right),
+          });
+        }
+      });
+      const rail = document.querySelector(".tool-rail");
+      if (rail) {
+        const style = getComputedStyle(rail);
+        out.rail = {
+          offset: [rail.offsetWidth, rail.offsetHeight],
+          client: [rail.clientWidth, rail.clientHeight],
+          scroll: [rail.scrollWidth, rail.scrollHeight],
+          overflowX: style.overflowX,
+          overflowY: style.overflowY,
+          scrollbarWidth: rail.offsetWidth - rail.clientWidth,
+        };
+      }
+      return out;
+    })()`);
+  console.log("[layout-probe] default:", JSON.stringify(await measure()));
+  win.setContentSize(970, 640);
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  console.log("[layout-probe] near-min:", JSON.stringify(await measure()));
+  await shoot("layout-near-min", win, 500);
 }
 
 /* ------------------------------------------------------------------------- */

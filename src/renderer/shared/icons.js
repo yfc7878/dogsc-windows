@@ -53,7 +53,9 @@ const P = {
   list: `<path d="M8.4 6.4h12M8.4 12h12M8.4 17.6h12" stroke-linecap="round"/><circle cx="4.4" cy="6.4" r="1.15" fill="currentColor" stroke="none"/><circle cx="4.4" cy="12" r="1.15" fill="currentColor" stroke="none"/><circle cx="4.4" cy="17.6" r="1.15" fill="currentColor" stroke="none"/>`,
   scissors: `<circle cx="6.6" cy="6.4" r="2.6"/><circle cx="6.6" cy="17.6" r="2.6"/><path d="M8.8 7.8 20 17.4M8.8 16.2 20 6.6" stroke-linecap="round"/>`,
   magnet: `<path d="M6 4.6v8.2a6 6 0 0 0 12 0V4.6" stroke-linecap="round"/><path d="M6 10.4h4.4M13.6 10.4H18" stroke-linecap="round"/>`,
-  settings: `<circle cx="12" cy="12" r="3.1"/><path d="M12 2.8l1.3 2.3 2.6-.5.6 2.6 2.4 1-1 2.5 1 2.5-2.4 1-.6 2.6-2.6-.5L12 21.2l-1.3-2.3-2.6.5-.6-2.6-2.4-1 1-2.5-1-2.5 2.4-1 .6-2.6 2.6.5z" stroke-linejoin="round"/>`,
+  /* Eight-tooth gear, mirror-symmetric on both axes (the old path spiralled
+     and rendered as an unrecognisable blob next to 通用). */
+  settings: `<circle cx="12" cy="12" r="3.1"/><path d="M9.91 2.94A9.3 9.3 0 0 1 14.09 2.94L14.34 5.40L15.01 5.68L16.93 4.11A9.3 9.3 0 0 1 19.89 7.07L18.32 8.99L18.60 9.66L21.06 9.91A9.3 9.3 0 0 1 21.06 14.09L18.60 14.34L18.32 15.01L19.89 16.93A9.3 9.3 0 0 1 16.93 19.89L15.01 18.32L14.34 18.60L14.09 21.06A9.3 9.3 0 0 1 9.91 21.06L9.66 18.60L8.99 18.32L7.07 19.89A9.3 9.3 0 0 1 4.11 16.93L5.68 15.01L5.40 14.34L2.94 14.09A9.3 9.3 0 0 1 2.94 9.91L5.40 9.66L5.68 8.99L4.11 7.07A9.3 9.3 0 0 1 7.07 4.11L8.99 5.68L9.66 5.40L9.91 2.94z" stroke-linejoin="round"/>`,
   play: `<path d="M7.6 4.8 19 12 7.6 19.2z" fill="currentColor" stroke="none"/>`,
   pause: `<rect x="6.6" y="4.8" width="3.6" height="14.4" rx="1.2" fill="currentColor" stroke="none"/><rect x="13.8" y="4.8" width="3.6" height="14.4" rx="1.2" fill="currentColor" stroke="none"/>`,
   prevFrame: `<path d="M18.6 5.4 9.4 12l9.2 6.6z" fill="currentColor" stroke="none"/><path d="M5.8 4.8v14.4" stroke-linecap="round"/>`,
