@@ -869,7 +869,8 @@ export function createEffectClip(kind, startTime, duration = 1.6) {
       const point = pointerNear(doc, startTime);
       doc.timeline.zoomClips.push({
         ...base,
-        mode: "自动",
+        /* 手动添加的缩放焦点固定；跟随指针的"自动"片段由自动运镜生成。 */
+        mode: "手动",
         focus: point,
         scale: doc.motion.defaultZoomScale || 1.4,
       });

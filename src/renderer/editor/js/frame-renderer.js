@@ -18,6 +18,7 @@ import {
   timelineDuration,
   clipDuration,
 } from "./model.js";
+import { automaticFocusAt } from "./auto-zoom.js";
 
 const TAU = Math.PI * 2;
 
@@ -154,9 +155,17 @@ export function layoutScreen(document, time, width, height) {
     const progress = evaluated ? evaluated.progress : 1;
     const targetScale = 1 + (zoom.scale - 1) * progress;
     scale *= targetScale;
+    /* Automatic clips follow the recorded pointer (spring-chased, restricted
+       to the visible area); manual clips keep their authored focus. Focus is
+       normalized against the full recorded frame, while the card shows the
+       cropped region — undo the crop like the cursor mapping does, or a
+       cropped project points the zoom at the wrong spot. */
+    const rawFocus = automaticFocusAt(document, zoom, time) || zoom.focus;
+    const focusX = Math.min(Math.max((rawFocus.x - crop.x) / Math.max(crop.width, 0.0001), 0), 1);
+    const focusY = Math.min(Math.max((rawFocus.y - crop.y) / Math.max(crop.height, 0.0001), 0), 1);
     /* The focus point stays pinned while the picture expands around it. */
-    const fx = (zoom.focus.x - 0.5) * baseWidth * (targetScale - 1);
-    const fy = (zoom.focus.y - 0.5) * baseHeight * (targetScale - 1);
+    const fx = (focusX - 0.5) * baseWidth * (targetScale - 1);
+    const fy = (focusY - 0.5) * baseHeight * (targetScale - 1);
     offsetX -= fx;
     offsetY -= fy;
   }

@@ -17,6 +17,7 @@ import {
   toast,
 } from "../../shared/widgets.js";
 import { CANVAS_RATIOS, normalizeDocument } from "./model.js";
+import { planAutoZoom } from "./auto-zoom.js";
 import { renderFrame, setInteractiveSelection, resolveCanvasSize } from "./frame-renderer.js";
 import { store } from "./store.js";
 import {
@@ -464,6 +465,8 @@ function buildCanvasToolbar() {
         { separator: true },
         { label: t("在播放头添加屏幕 3D"), icon: "spark", onSelect: () => addScreenMotion() },
         { label: t("在播放头添加摄像运动"), icon: "camera", onSelect: () => addCameraMotion() },
+        { separator: true },
+        { label: t("自动运镜（按点击生成）"), icon: "zoomIn", onSelect: runAutoZoom },
       ],
       { align: "center", width: 250 }
     );
@@ -624,6 +627,26 @@ function addScreenMotion() {
     });
     doc.timeline.screenMotionClips.sort((a, b) => a.startTime - b.startTime);
   });
+}
+
+/**
+ * 自动运镜：按录制的点击轨迹生成缩放片段（对应原版 AutoZoomPlanner）。
+ * 重新生成时只替换先前的自动片段，手动添加的缩放保持不动。
+ */
+function runAutoZoom() {
+  if (!store.document) return;
+  const planned = planAutoZoom(store.document);
+  if (!planned.length) {
+    toast(t("没有可用于自动运镜的点击记录"), { icon: "info" });
+    return;
+  }
+  store.commit(t("自动运镜"), (doc) => {
+    doc.timeline.zoomClips = [
+      ...doc.timeline.zoomClips.filter((clip) => clip.mode !== "自动"),
+      ...planned,
+    ].sort((a, b) => a.startTime - b.startTime);
+  });
+  toast(t("已生成 %d 段自动运镜", planned.length), { icon: "spark" });
 }
 
 function addCameraMotion() {

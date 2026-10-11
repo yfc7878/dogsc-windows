@@ -935,6 +935,9 @@ async function runSmokeTest(outputDir, projectPath) {
     if (process.env.DOGSC_SEEK_PROBE) {
       await runSeekProbe(editor);
     }
+    if (process.env.DOGSC_AUTOZOOM_PROBE) {
+      await runAutoZoomProbe(editor);
+    }
     if (process.env.DOGSC_TOPBAR_EXPORT_PROBE) {
       await runTopbarExportProbe(editor, outputDir);
     }
@@ -1904,6 +1907,71 @@ async function runSeekProbe(win) {
     console.log(`[seek-probe] ${moved ? "PASS" : "FAIL"}`);
   } catch (error) {
     console.error("[seek-probe] failed:", error.message);
+  }
+}
+
+/**
+ * Drives the auto camera motion (自动运镜) end to end inside the editor: plan
+ * clips from the recorded pointer track, apply them through the real store
+ * commit, verify the follow camera resolves, then undo everything so the
+ * project is left untouched. `DOGSC_AUTOZOOM_PROBE=1` enables it.
+ */
+async function runAutoZoomProbe(win) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    const result = await win.webContents.executeJavaScript(
+      `(async () => {
+         const module = await import("app://dogsc/editor/js/auto-zoom.js");
+         const store = window.__dogscStore;
+         if (!store?.document) return { error: "no document" };
+         const track = store.document.pointerTrack || {};
+         const before = store.document.timeline.zoomClips.length;
+         const planned = module.planAutoZoom(store.document);
+         const summary = {
+           clicks: (track.clicks || []).filter((c) => c.button !== "wheel").length,
+           samples: (track.samples || []).length,
+           planned: planned.map((clip) => ({
+             start: Number(clip.startTime.toFixed(3)),
+             duration: Number(clip.duration.toFixed(3)),
+             scale: clip.scale,
+             mode: clip.mode,
+             focus: { x: Number(clip.focus.x.toFixed(3)), y: Number(clip.focus.y.toFixed(3)) },
+           })),
+         };
+         if (!planned.length) return { ...summary, error: "nothing planned" };
+         store.commit("自动运镜探针", (doc) => {
+           doc.timeline.zoomClips = [
+             ...doc.timeline.zoomClips.filter((clip) => clip.mode !== "自动"),
+             ...planned,
+           ].sort((a, b) => a.startTime - b.startTime);
+         });
+         summary.after = store.document.timeline.zoomClips.length;
+         const last = planned[planned.length - 1];
+         const follow = module.automaticFocusAt(
+           store.document,
+           last,
+           last.startTime + last.duration * 0.6
+         );
+         summary.follow = follow
+           ? { x: Number(follow.x.toFixed(3)), y: Number(follow.y.toFixed(3)) }
+           : null;
+         ${process.env.DOGSC_AUTOZOOM_APPLY ? "summary.kept = true;" : "store.undo();"}
+         summary.restored =
+           ${process.env.DOGSC_AUTOZOOM_APPLY ? "true" : "store.document.timeline.zoomClips.length === before"};
+         return summary;
+       })()`
+    );
+    console.log("[autozoom-probe]", JSON.stringify(result));
+    const ok =
+      result &&
+      !result.error &&
+      result.planned?.length > 0 &&
+      result.after === result.planned.length &&
+      result.follow &&
+      result.restored === true;
+    console.log(`[autozoom-probe] ${ok ? "PASS" : "FAIL"}`);
+  } catch (error) {
+    console.error("[autozoom-probe] failed:", error.message);
   }
 }
 
