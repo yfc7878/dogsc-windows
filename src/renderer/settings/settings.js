@@ -6,9 +6,13 @@
 
 import { icon } from "../shared/icons.js";
 import { setLocale, t } from "../shared/i18n.js";
-import { attachTooltip, choiceGroup, switchRow, toast } from "../shared/widgets.js";
+import { attachTooltip, choiceGroup, enableManualDrag, switchRow, toast } from "../shared/widgets.js";
 
 const api = window.dogsc;
+
+/* The settings window is frameless; its title areas move the window
+   programmatically because CSS app-region drag strobes on Windows here. */
+enableManualDrag();
 
 const SECTIONS = [
   { id: "general", label: "通用", icon: "settings" },

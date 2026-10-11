@@ -533,3 +533,95 @@ export function uid() {
     return v.toString(16);
   });
 }
+
+/* ------------------------------------------------------------------------- */
+/* Manual window dragging                                                    */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Manual window dragging for frameless windows.
+ *
+ * The CSS `-webkit-app-region: drag` region drives Chromium's native move
+ * loop, which strobes and jumps toward the top-left corner on Windows in this
+ * app's configuration (frameless windows, software rendering, 125% DPI). The
+ * recorder bar solved the same problem by moving the window programmatically;
+ * this helper applies that approach to the other frameless windows (settings,
+ * export sheet, completion, memo).
+ *
+ * The movement is *incremental*: every event contributes only its own delta,
+ * and the bounds measured at mousedown travel with the drag. This matters
+ * because moving a window under a stationary cursor makes Windows emit extra
+ * real mousemoves for the cursor's unchanged position — with an absolute
+ * anchor those stray events teleport the window toward the cursor (observed
+ * as the "flash to the top-left and back" family of glitches), while with
+ * deltas they contribute exactly zero.
+ *
+ * Deltas are accumulated per `isTrusted` stream. Real drags consist solely of
+ * trusted events, so this changes nothing for users; it exists so the
+ * automated drag test (which injects untrusted synthetic moves while the
+ * real cursor sits elsewhere) cannot have its trajectory poisoned by the
+ * discontinuity between the two coordinate sources.
+ *
+ * `selector` marks the draggable surfaces; a press on an `interactive`
+ * element inside them stays a click. `event.screenX/screenY` and
+ * `getBounds`/`setBounds` share the same DIP space, so the offsets stay
+ * exact on scaled displays. The cached width/height are sent explicitly on
+ * every move so the main process's bounds merge can never drift the size.
+ */
+export function enableManualDrag(
+  selector = ".js-drag",
+  interactive = "button, input, select, textarea, a, .no-drag"
+) {
+  const windowsApi = window.dogsc?.windows;
+  if (!windowsApi?.getBounds || !windowsApi?.setBounds) return;
+
+  let drag = null;
+  let dragFrame = 0;
+
+  document.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) return;
+    if (!event.target.closest?.(selector)) return;
+    if (event.target.closest?.(interactive)) return;
+    event.preventDefault();
+    windowsApi.getBounds().then((bounds) => {
+      if (!bounds) return;
+      /* Seed the pressing stream's anchor with the mousedown itself, so its
+         first move contributes a delta instead of merely initializing. */
+      const stream = event.isTrusted ? "trusted" : "synthetic";
+      drag = {
+        base: bounds,
+        last: { trusted: null, synthetic: null, [stream]: { x: event.screenX, y: event.screenY } },
+        dx: 0,
+        dy: 0,
+      };
+    });
+  });
+
+  window.addEventListener("mousemove", (event) => {
+    if (!drag) return;
+    const stream = event.isTrusted ? "trusted" : "synthetic";
+    const last = drag.last[stream];
+    if (last) {
+      drag.dx += event.screenX - last.x;
+      drag.dy += event.screenY - last.y;
+    }
+    drag.last[stream] = { x: event.screenX, y: event.screenY };
+    const state = drag;
+    cancelAnimationFrame(dragFrame);
+    dragFrame = requestAnimationFrame(() => {
+      windowsApi.setBounds({
+        x: Math.round(state.base.x + state.dx),
+        y: Math.round(state.base.y + state.dy),
+        width: Math.round(state.base.width),
+        height: Math.round(state.base.height),
+      });
+    });
+  });
+
+  const stop = () => {
+    drag = null;
+    cancelAnimationFrame(dragFrame);
+  };
+  window.addEventListener("mouseup", stop);
+  window.addEventListener("blur", stop);
+}

@@ -8,9 +8,14 @@
 
 import { icon } from "../shared/icons.js";
 import { setLocale, t } from "../shared/i18n.js";
-import { attachTooltip, toast } from "../shared/widgets.js";
+import { attachTooltip, enableManualDrag, toast } from "../shared/widgets.js";
 
 const api = window.dogsc;
+
+/* The memo is frameless; its title bar moves the window programmatically
+   because CSS app-region drag strobes on Windows here (same fix as the
+   recorder bar, which has always dragged this way). */
+enableManualDrag();
 
 const editor = document.getElementById("editor");
 const reader = document.getElementById("reader");

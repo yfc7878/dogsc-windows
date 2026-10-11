@@ -883,6 +883,9 @@ async function runSmokeTest(outputDir, projectPath) {
 
   const settings = windows.createSettings();
   await shoot("03-settings", settings, 2800);
+  if (process.env.DOGSC_DRAG_TEST) {
+    await runDragTest(settings, "settings");
+  }
 
   /* The settings window keeps its preference snapshot in one variable, so the
      write calls have to hand back the whole store. */
@@ -942,6 +945,9 @@ async function runSmokeTest(outputDir, projectPath) {
       sourceSize: { width: 1920, height: 1080 },
     });
     await shoot("05-export", exportPanel, 5000);
+    if (process.env.DOGSC_DRAG_TEST) {
+      await runDragTest(exportPanel, "exportPanel");
+    }
 
     if (process.env.DOGSC_EXPORT_TEST) {
       await runExportTest(exportPanel, outputDir);
@@ -1485,6 +1491,87 @@ async function runTopbarExportProbe(editor, outputDir) {
   } else {
     console.log("[topbar-export] FULL-RUN PASS");
   }
+}
+
+/**
+ * Verifies the manual window drag (`enableManualDrag` in widgets.js): a
+ * synthetic mousedown on the `.js-drag` region followed by synthetic moves
+ * must move the window by the same delta and never change its size. This is
+ * only possible because the drag is JS-driven — the native app-region move
+ * loop ignores synthetic events entirely. `DOGSC_DRAG_TEST=1` enables it.
+ */
+async function runDragTest(win, name) {
+  if (!win || win.isDestroyed()) return;
+  const before = win.getBounds();
+  const rendererBefore = await win.webContents
+    .executeJavaScript(`window.dogsc.windows.getBounds()`)
+    .catch(() => null);
+  console.log(
+    `[drag-test] ${name}: main-before=${JSON.stringify(before)} renderer-before=${JSON.stringify(rendererBefore)}`
+  );
+  const press = await win.webContents.executeJavaScript(
+    `(() => {
+       const head = document.querySelector(".settings-head.js-drag, .sheet-head.js-drag, .memo-head.js-drag, .js-drag");
+       if (!head) return null;
+       const rect = head.getBoundingClientRect();
+       const screenX = Math.round(rect.left + Math.min(60, rect.width / 2));
+       const screenY = Math.round(rect.top + 10);
+       head.dispatchEvent(new MouseEvent("mousedown", {
+         bubbles: true, cancelable: true, button: 0,
+         screenX, screenY, clientX: screenX, clientY: screenY,
+       }));
+       return { screenX, screenY };
+     })()`
+  );
+  if (!press) {
+    console.error(`[drag-test] ${name}: no .js-drag region found`);
+    return;
+  }
+  console.log(`[drag-test] ${name}: press=${JSON.stringify(press)}`);
+  /* The mousedown handler resolves getBounds() over IPC before it starts
+     tracking; give it a beat so the first move is not dropped. */
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const afterDown = win.getBounds();
+  const afterMove1 = await (async () => {
+    await win.webContents.executeJavaScript(
+      `window.dispatchEvent(new MouseEvent("mousemove", {
+         screenX: ${press.screenX + 10},
+         screenY: ${press.screenY + 5},
+       }))`
+    );
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    return win.getBounds();
+  })();
+  console.log(
+    `[drag-test] ${name}: afterDown=${JSON.stringify(afterDown)} afterMove1=${JSON.stringify(afterMove1)}`
+  );
+  const moves = 10;
+  for (let index = 2; index <= moves; index += 1) {
+    await win.webContents.executeJavaScript(
+      `window.dispatchEvent(new MouseEvent("mousemove", {
+         screenX: ${press.screenX + index * 10},
+         screenY: ${press.screenY + index * 5},
+       }))`
+    );
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  /* Let the final rAF land before mouseup — stop() cancels a pending one. */
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  await win.webContents.executeJavaScript(
+    `window.dispatchEvent(new MouseEvent("mouseup", {}))`
+  );
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const after = win.getBounds();
+  const dx = after.x - before.x;
+  const dy = after.y - before.y;
+  /* ±2px: a setBounds round-trip at 125% DPI can jiggle the reported size
+     by a pixel; the drag itself never requests a size change. */
+  const sizeStable =
+    Math.abs(after.width - before.width) <= 2 && Math.abs(after.height - before.height) <= 2;
+  const ok = Math.abs(dx - moves * 10) <= 3 && Math.abs(dy - moves * 5) <= 3 && sizeStable;
+  console.log(
+    `[drag-test] ${name}: d=(${dx}, ${dy}) size ${before.width}x${before.height} -> ${after.width}x${after.height} ${ok ? "PASS" : "FAIL"}`
+  );
 }
 
 /**

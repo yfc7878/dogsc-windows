@@ -8,9 +8,13 @@
 
 import { icon } from "../shared/icons.js";
 import { setLocale, t } from "../shared/i18n.js";
-import { showSheet, toast, formatDuration, formatBytes } from "../shared/widgets.js";
+import { enableManualDrag, showSheet, toast, formatDuration, formatBytes } from "../shared/widgets.js";
 
 const api = window.dogsc;
+
+/* The completion sheet is frameless; its title bar moves the window
+   programmatically because CSS app-region drag strobes on Windows here. */
+enableManualDrag();
 let payload = null;
 
 async function boot() {

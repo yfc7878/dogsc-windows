@@ -13,6 +13,7 @@ import { icon } from "../shared/icons.js";
 import { setLocale, t } from "../shared/i18n.js";
 import {
   attachTooltip,
+  enableManualDrag,
   formatBytes,
   formatDuration,
   formatTimecode,
@@ -28,6 +29,10 @@ import {
 } from "../editor/js/model.js";
 
 const api = window.dogsc;
+
+/* The export sheet is frameless; its title bar moves the window
+   programmatically because CSS app-region drag strobes on Windows here. */
+enableManualDrag();
 
 const RESOLUTIONS = [
   { value: "原始素材", label: "原始素材", note: "跟随素材" },
