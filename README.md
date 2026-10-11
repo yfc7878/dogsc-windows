@@ -4,6 +4,13 @@ Windows 移植版 [DogSC](https://github.com/laogou717/dogsc) —— 屏幕录�
 
 录制、剪辑、运镜，到导出成片。功能、界面布局、交互方式与使用体验对齐 macOS 原版。
 
+> ## ⚠️ 开发版提示（请先阅读）
+>
+> - 这是一个正在持续开发中的移植版本，**功能可用但不保证稳定**，可能仍有未发现的 bug（导出、录制、光标等模块都在近期修复过多轮）。
+> - 本仓库**不是原作者的官方发布**，使用中遇到的问题请在本仓库提 Issue，不要提到原仓库。
+> - 未提供预编译安装包，请按下方说明从源码运行；自行打包的产物同样属于开发版。
+> - 欢迎试用与反馈，但请勿用于重要的商业录制场景。
+
 ---
 
 ## 怎么打开
@@ -241,6 +248,23 @@ HTML、CSS、字体与 ES 模块可以留在 asar 内——它们经 `app://` �
 
 ---
 
+## 致谢与引用
+
+本移植建立在以下开源成果之上，特此致谢：
+
+- **DogSC 原版（macOS）**：由 **神烦老狗（[@laogou717](https://github.com/laogou717)）** 设计、开发并以 MIT License 开源 —— <https://github.com/laogou717/dogsc>。
+  本移植的产品设计、界面布局、交互方式与核心算法（自动缩放、光标平滑、画布布局、导出码率策略等）均来自原版；`LICENSE` 保留原作者的版权声明。
+- **社区移植参考**：[@xiaoying8666/dogscwindows](https://github.com/xiaoying8666/dogscwindows)（MIT License）。
+  本移植在以下模块参考了该项目对原版算法的移植方式，公式与常量逐值对齐：
+  - **自动运镜**（AutoZoomPlanner + 自动跟随镜头）→ `src/renderer/editor/js/auto-zoom.js`
+  - **光标弹簧平滑与点击锚定**（PointerTrack）→ `src/renderer/editor/js/pointer-smooth.js`
+  - **导出活动看门狗与 BT.709 色彩标记** → `src/renderer/export/export.js`、`src/main/exporter.js`
+
+  对照用的参考源码副本存档于 `docs/reference-xiaoying-port/`（含来源说明 `SOURCE.md`），供逐值查证。
+- **随包字体**：Alibaba PuHuiTi 3，采用其自身许可，见 `resources/fonts/LICENSE.txt`。
+
+---
+
 ## 许可
 
-源代码沿用原版的 MIT License。随包字体（Alibaba PuHuiTi 3）采用其自身许可，见 `resources/fonts/LICENSE.txt`。
+源代码沿用原版的 MIT License，版权归原作者所有。随包字体（Alibaba PuHuiTi 3）采用其自身许可，见 `resources/fonts/LICENSE.txt`。
