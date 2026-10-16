@@ -4,20 +4,31 @@ Windows 移植版 [DogSC](https://github.com/laogou717/dogsc) —— 屏幕录�
 
 录制、剪辑、运镜，到导出成片。功能、界面布局、交互方式与使用体验对齐 macOS 原版。
 
-**English** — Unofficial Windows port of [DogSC](https://github.com/laogou717/dogsc), the macOS screen recorder with lightweight editing: screen / window / area recording, zoom and camera moves, cursor effects, 3D screen motion, backgrounds, mockups, and export. Features, layout and feel follow the original. This is a development build — usable, but not guaranteed stable, and not an official release of the original author. No prebuilt binaries; run it from source (see below).
+**English** — Unofficial Windows port of [DogSC](https://github.com/laogou717/dogsc), the macOS screen recorder with lightweight editing: screen / window / area recording, zoom and camera moves, cursor effects, 3D screen motion, backgrounds, mockups, and export. Features, layout and feel follow the original. This is a development build — usable, but not guaranteed stable, and not an official release of the original author. Prebuilt Windows binaries are available on the [Releases](https://github.com/yfc7878/dogsc-windows/releases/latest) page; you can also run it from source (see below).
 
 > ## ⚠️ 开发版提示（请先阅读）
 >
 > - 这是一个正在持续开发中的移植版本，**功能可用但不保证稳定**，可能仍有未发现的 bug（导出、录制、光标等模块都在近期修复过多轮）。
 > - 本仓库**不是原作者的官方发布**，使用中遇到的问题请在本仓库提 Issue，不要提到原仓库。
-> - 未提供预编译安装包，请按下方说明从源码运行；自行打包的产物同样属于开发版。
+> - 已提供预编译的安装版与便携版（见 [Releases](https://github.com/yfc7878/dogsc-windows/releases/latest)），与源码版一样属于开发版；也可以按下方说明从源码运行。
 > - 欢迎试用与反馈，但请勿用于重要的商业录制场景。
 
 ---
 
-## 怎么打开
+## 下载
 
-**最简单：双击 `启动 DogSC.bat`。**
+不想折腾源码？直接下载打包好的程序：**[前往 Releases 下载最新版 →](https://github.com/yfc7878/dogsc-windows/releases/latest)**
+
+| 文件 | 说明 |
+| --- | --- |
+| `DogSC-0.1.2-win-x64-setup.exe` | 安装版：可选择安装目录，带开始菜单快捷方式 |
+| `DogSC-0.1.2-win-x64-portable.exe` | 免安装便携版：双击即用 |
+
+Windows 10 / 11（64 位）。未做代码签名，首次运行若遇 SmartScreen 提示，请选择「更多信息 → 仍要运行」。
+
+## 从源码运行
+
+**双击 `启动 DogSC.bat`。**
 
 项目根目录有三个启动脚本（双击即可；后两个只是转发到主脚本，启动逻辑只维护一份）：
 
