@@ -1389,6 +1389,28 @@ async function runMediaExchangeProbe(outputDir) {
     if (hadPreviousClipboard) clipboard.writeImage(previousClipboardImage);
     else clipboard.clear();
 
+    /* Background import (选择画布背景) shares the same store pipeline; the
+       probe replays it with a video so both the copy and the decode path are
+       covered. */
+    const backgroundRun = await editor.webContents.executeJavaScript(
+      `(async () => {
+         const store = window.__dogscStore;
+         const relative = await store.importBackground(${JSON.stringify(replacement)});
+         if (!relative) return { error: "importBackground returned null" };
+         store.commit("probe-background", (doc) => {
+           doc.canvas.backgroundSource = { kind: "projectVideo", relativePath: relative };
+         });
+         await store.loadBackground();
+         const video = store.backgroundVideo;
+         return { relative, width: video?.videoWidth || 0, height: video?.videoHeight || 0 };
+       })()`
+    );
+    record(
+      "导入背景视频：进入项目包并可播放",
+      !backgroundRun?.error && (backgroundRun?.width || 0) > 0,
+      backgroundRun?.error || `${backgroundRun?.relative} ${backgroundRun?.width}x${backgroundRun?.height}`
+    );
+
     if (!editor.isDestroyed()) editor.destroy();
   } catch (error) {
     record("probe 执行", false, String(error?.message || error));
