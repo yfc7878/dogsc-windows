@@ -307,6 +307,7 @@ function topButton(iconName, title, onClick) {
 }
 
 function showProjectMenu(anchor) {
+  const media = store.document?.media || {};
   showMenu(
     anchor,
     [
@@ -315,6 +316,11 @@ function showProjectMenu(anchor) {
       { separator: true },
       { label: t("打开项目…"), note: "Ctrl+O", onSelect: pickProject },
       { label: t("在文件夹中显示"), onSelect: () => api.project.reveal(store.packagePath) },
+      { separator: true },
+      /* The original's Project menu: 导出项目源文件… / 替换当前项目摄像头…,
+         each enabled only when its media exists. */
+      { label: t("导出项目源文件…"), onSelect: exportProjectSources, disabled: !media.screen },
+      { label: t("替换当前项目摄像头…"), onSelect: replaceProjectCamera, disabled: !media.camera },
       { separator: true },
       { label: t("导出成片…"), note: "Ctrl+E", onSelect: openExport },
     ],
@@ -512,14 +518,27 @@ function buildCanvasToolbar() {
   const add = document.createElement("button");
   add.type = "button";
   add.className = "chip chip-icon";
+  add.id = "canvas-add";
   add.innerHTML = icon("plus", 15);
   attachTooltip(add, t("添加到画面"));
-  add.addEventListener("click", (event) => {
+  add.addEventListener("click", async (event) => {
+    /* `currentTarget` is cleared once the event finishes dispatching, so it
+       must be captured before the clipboard check awaits. */
+    const anchor = event.currentTarget;
+    /* "粘贴图片" mirrors the original's canPasteOverlayImage: the item is
+       only enabled while the clipboard actually holds an image. */
+    const canPasteImage = await api.clipboard.hasImage().catch(() => false);
     showMenu(
-      event.currentTarget,
+      anchor,
       [
-        { label: t("导入贴图…"), icon: "sticker", onSelect: importSticker },
         { label: t("柔化或突出"), icon: "wand", onSelect: addMosaic },
+        { label: t("导入贴图…"), icon: "sticker", onSelect: importSticker },
+        {
+          label: t("粘贴图片"),
+          icon: "clipboard",
+          onSelect: pasteSticker,
+          disabled: !canPasteImage,
+        },
         { separator: true },
         { label: t("在播放头添加屏幕 3D"), icon: "spark", onSelect: () => addScreenMotion() },
         { label: t("在播放头添加摄像运动"), icon: "camera", onSelect: () => addCameraMotion() },
@@ -625,10 +644,29 @@ async function importSticker() {
     filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
   });
   if (!file) return;
+  await addStickerFromFile(file, t("导入贴图…"));
+}
+
+/** The original's "粘贴图片": the clipboard bitmap goes through the same
+    import + add-at-playhead flow as an explicitly chosen sticker file. */
+async function pasteSticker() {
+  if (!store.document || ui.cropMode) return;
+  const file = await api.clipboard.readImage();
+  if (!file) {
+    toast(t("剪贴板中没有图片"), { icon: "info" });
+    return;
+  }
+  await addStickerFromFile(file, t("粘贴图片"));
+}
+
+/** Copies the file into the package, then adds a sticker clip at the
+    playhead — shared by "导入贴图…" and "粘贴图片" (addStickerAtPlayhead /
+    addPastedSticker both funnel into the original's commitSticker). */
+async function addStickerFromFile(file, actionName) {
   const relative = await store.importSticker(file);
   if (!relative) return;
   const layer = store.document.timeline.stickerClips.length;
-  store.commit(t("导入贴图…"), (doc) => {
+  store.commit(actionName, (doc) => {
     doc.timeline.stickerClips.push({
       id: crypto.randomUUID(),
       startTime: store.playhead,
@@ -648,6 +686,87 @@ async function importSticker() {
       animationOutDuration: 0.4,
     });
   });
+}
+
+/* ------------------------------------------------------------------------- */
+/* Media exchange (ProjectMediaExchange.swift)                               */
+/* ------------------------------------------------------------------------- */
+
+/** Mirrors the original's `isMediaExchangeRunning`. */
+let mediaExchangeBusy = false;
+
+/** Localises a structured result from the main-process media exchange. */
+function mediaExchangeError(result) {
+  switch (result?.code) {
+    case "missing-file":
+      return t("选择的文件不存在：%@", result.detail?.path || "");
+    case "no-video-track":
+      return t("%@ 没有可用的%@轨。", result.detail?.name || "", t("视频"));
+    case "missing-source":
+      return t("源文件不存在或已被移动。");
+    case "exporting":
+      return t("正在导出成片，暂时无法替换摄像头素材。");
+    default:
+      return result?.message || t("未知错误");
+  }
+}
+
+/** "导出项目源文件…" — copies the untouched source recordings out. */
+async function exportProjectSources() {
+  const doc = store.document;
+  if (mediaExchangeBusy || !doc?.media?.screen) return;
+  mediaExchangeBusy = true;
+  try {
+    const result = await api.project.exportSources({
+      packagePath: store.packagePath,
+      title: doc.name,
+      references: {
+        screen: doc.media?.screen?.path || null,
+        camera: doc.media?.camera?.path || null,
+        microphone: doc.media?.microphone?.path || null,
+      },
+    });
+    if (!result || result.code === "canceled") return;
+    if (!result.ok) {
+      toast(t("导出源文件失败：%@", mediaExchangeError(result)), { icon: "warning" });
+      return;
+    }
+    /* The original reveals the folder in the file browser afterwards. */
+    api.project.reveal(result.folder);
+  } finally {
+    mediaExchangeBusy = false;
+  }
+}
+
+/** "替换当前项目摄像头…" — swaps the camera track for a prepared file. */
+async function replaceProjectCamera() {
+  const doc = store.document;
+  if (mediaExchangeBusy || !doc?.media?.camera) return;
+  const file = await api.project.pickFile({
+    title: t("选择替换用摄像头文件"),
+    buttonLabel: t("替换摄像头"),
+    filters: [{ name: t("视频"), extensions: ["mp4", "mov", "m4v", "webm", "mkv", "avi"] }],
+  });
+  if (!file) return;
+  mediaExchangeBusy = true;
+  try {
+    const result = await api.project.replaceCamera({
+      packagePath: store.packagePath,
+      source: file,
+    });
+    if (!result) return;
+    if (!result.ok) {
+      toast(t("替换摄像头文件失败：%@", mediaExchangeError(result)), { icon: "warning" });
+      return;
+    }
+    try {
+      await store.applyCameraReplacement(result.camera);
+    } catch {
+      toast(t("替换摄像头文件失败：%@", t("这个文件无法在本应用中播放。")), { icon: "warning" });
+    }
+  } finally {
+    mediaExchangeBusy = false;
+  }
 }
 
 function addMosaic() {

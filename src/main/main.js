@@ -21,6 +21,7 @@ const {
   ipcMain,
   dialog,
   shell,
+  clipboard,
   nativeTheme,
   desktopCapturer,
   screen,
@@ -39,6 +40,7 @@ const { WindowManager } = require("./windows");
 const { PointerTracker, physicalRectForDisplay } = require("./input-hook");
 const projectIO = require("./project");
 const exporter = require("./exporter");
+const mediaExchange = require("./media-exchange");
 const screenCapture = require("./screen-capture");
 const desktopIcons = require("./desktop-icons");
 
@@ -701,6 +703,7 @@ function registerIpc() {
       title: options.title,
       defaultPath: options.defaultPath,
       filters: options.filters,
+      buttonLabel: options.buttonLabel,
       properties: options.multiple ? ["openFile", "multiSelections"] : ["openFile"],
     });
     if (result.canceled) return null;
@@ -724,6 +727,88 @@ function registerIpc() {
       options.relative || path.join("media", path.basename(source))
     );
     return { relative, absolute: path.join(packagePath, relative) };
+  });
+  /* ---- Media exchange (ProjectMediaExchange.swift) ---- */
+  /**
+   * Replaces the camera track with an externally prepared file, matching the
+   * original's "替换当前项目摄像头…". The renderer already asked the user for
+   * the file; this side validates it, copies (or transcodes) it into the
+   * package and answers with the new media reference.
+   */
+  ipcMain.handle("project:replace-camera", async (_e, payload = {}) => {
+    const { packagePath, source } = payload;
+    if (!packagePath || !source) return { ok: false, code: "invalid-request" };
+    /* The original refuses while an export is running: replacing media under
+       an active export would change what the muxing pipeline reads. */
+    if (exportJob) return { ok: false, code: "exporting" };
+    try {
+      const camera = await mediaExchange.importCameraReplacement({
+        packagePath,
+        source,
+      });
+      return { ok: true, camera };
+    } catch (error) {
+      return {
+        ok: false,
+        code: error?.code || "failed",
+        detail: error?.detail || null,
+        message: error?.message ? String(error.message).slice(0, 300) : undefined,
+      };
+    }
+  });
+  /**
+   * The original's "导出项目源文件…": pick a folder, then copy the untouched
+   * screen / camera / microphone recordings into `<项目名>-源文件`.
+   */
+  ipcMain.handle("project:export-sources", async (_e, payload = {}) => {
+    const { packagePath, title, references } = payload;
+    if (!packagePath) return { ok: false, code: "invalid-request" };
+    const picked = await dialog.showOpenDialog({
+      title: "选择源文件导出文件夹",
+      buttonLabel: "导出到这里",
+      defaultPath: prefs.get("exportLocation") || undefined,
+      properties: ["openDirectory", "createDirectory"],
+    });
+    if (picked.canceled || !picked.filePaths[0]) {
+      return { ok: false, code: "canceled" };
+    }
+    try {
+      const folder = await mediaExchange.exportSources({
+        packagePath,
+        title,
+        parent: picked.filePaths[0],
+        references,
+      });
+      return { ok: true, folder };
+    } catch (error) {
+      return {
+        ok: false,
+        code: error?.code || "failed",
+        detail: error?.detail || null,
+        message: error?.message ? String(error.message).slice(0, 300) : undefined,
+      };
+    }
+  });
+  /* ---- Clipboard (paste image → sticker) ---- */
+  /**
+   * The original reads NSPasteboard for "粘贴图片". `clipboard.readImage`
+   * covers the screenshot / copied-picture path; the bitmap is written to a
+   * temporary PNG so the renderer can feed it through the same import
+   * pipeline as "导入贴图…".
+   */
+  ipcMain.handle("clipboard:has-image", () => {
+    const image = clipboard.readImage();
+    return Boolean(image && !image.isEmpty());
+  });
+  ipcMain.handle("clipboard:read-image", async () => {
+    const image = clipboard.readImage();
+    if (!image || image.isEmpty()) return null;
+    const png = image.toPNG();
+    if (!png || !png.length) return null;
+    const dir = await ensureDir(tempDir());
+    const target = path.join(dir, `pasted-sticker-${Date.now()}.png`);
+    await fsp.writeFile(target, png);
+    return target;
   });
   ipcMain.handle("project:media-url", (_e, { packagePath, relative }) => {
     const absolute = projectIO.resolveMedia(packagePath, relative);
@@ -1007,8 +1092,312 @@ async function runSmokeTest(outputDir, projectPath) {
     }
   }
 
+  if (process.env.DOGSC_MEDIA_EXCHANGE_PROBE) {
+    await runMediaExchangeProbe(outputDir);
+  }
+
   console.log(`[smoke] captured ${smokeShots.length} window(s)`);
   app.quit();
+}
+
+/**
+ * End-to-end probe for the media-exchange surface — the Windows port of
+ * `ProjectMediaExchange.swift`: "替换当前项目摄像头…" and "导出项目源文件…".
+ *
+ * A minimal throwaway project is built from scratch (screen + camera tracks),
+ * so no user data is touched. The camera replacement runs through the real
+ * IPC (`project:replace-camera`) and the editor store, then the export side
+ * feeds the live document's media references back through the main-process
+ * export. `DOGSC_MEDIA_EXCHANGE_PROBE=1` (with `DOGSC_SMOKE=<dir>`) enables it.
+ */
+async function runMediaExchangeProbe(outputDir) {
+  const results = [];
+  const record = (name, ok, detail) => {
+    results.push(ok);
+    console.log(
+      `[media-exchange-probe] ${ok ? "PASS" : "FAIL"} ${name}${detail ? ` — ${detail}` : ""}`
+    );
+  };
+
+  const workDir = path.join(outputDir, "media-exchange");
+  const packagePath = path.join(workDir, "probe.dogscproject");
+  await fsp.rm(packagePath, { recursive: true, force: true }).catch(() => {});
+  await ensureDir(path.join(packagePath, "media"));
+
+  const runFfmpegOrThrow = (args) =>
+    new Promise((resolve, reject) => {
+      const child = require("child_process").spawn(exporter.ffmpegPath(), args, {
+        windowsHide: true,
+        env: childEnv(),
+      });
+      let stderr = "";
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr.slice(-300)))));
+      child.on("error", reject);
+    });
+
+  try {
+    /* Fixture: 1 s screen + 1 s camera, and a 2 s replacement (deliberately a
+       different length — the original explicitly allows that). */
+    await runFfmpegOrThrow([
+      "-y", "-f", "lavfi", "-i", "testsrc=duration=1:size=640x360:rate=30",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", path.join(packagePath, "media", "screen.mp4"),
+    ]);
+    await runFfmpegOrThrow([
+      "-y", "-f", "lavfi", "-i", "testsrc=duration=1:size=320x240:rate=30",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", path.join(packagePath, "media", "camera.mp4"),
+    ]);
+    const replacement = path.join(workDir, "replacement.mp4");
+    await runFfmpegOrThrow([
+      "-y", "-f", "lavfi", "-i", "testsrc=duration=2:size=640x360:rate=30",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", replacement,
+    ]);
+    const statOf = (file) => fs.statSync(file).size;
+    await fsp.writeFile(
+      path.join(packagePath, "project.json"),
+      JSON.stringify(
+        {
+          schemaVersion: projectIO.SCHEMA_VERSION,
+          id: "dogsc-media-exchange-probe",
+          name: "media-exchange-probe",
+          createdAt: new Date().toISOString(),
+          capture: { kind: "display", sourceName: "probe", fps: 30 },
+          media: {
+            screen: {
+              path: "media/screen.mp4",
+              duration: 1,
+              size: statOf(path.join(packagePath, "media", "screen.mp4")),
+              width: 640,
+              height: 360,
+            },
+            camera: {
+              path: "media/camera.mp4",
+              duration: 1,
+              size: statOf(path.join(packagePath, "media", "camera.mp4")),
+              width: 320,
+              height: 240,
+            },
+          },
+          pointerTrack: { samples: [], clicks: [] },
+          timeline: {
+            duration: 1,
+            primaryClips: [
+              { id: "clip-1", sourceStart: 0, sourceDuration: 1, startTime: 0, speed: 1 },
+            ],
+          },
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    /* Replace through the real IPC + editor store. */
+    const editor = windows.createEditor({ projectPath: packagePath });
+    await new Promise((resolve) => setTimeout(resolve, 7000));
+    const replaced = await editor.webContents.executeJavaScript(
+      `(async () => {
+         const store = window.__dogscStore;
+         if (!store?.document?.media?.camera) return { error: "no camera track in probe project" };
+         const result = await window.dogsc.project.replaceCamera({
+           packagePath: store.packagePath,
+           source: ${JSON.stringify(replacement)},
+         });
+         if (!result?.ok) return { error: "replace failed: " + (result?.code || "unknown") };
+         try {
+           await store.applyCameraReplacement(result.camera);
+         } catch (error) {
+           return { error: "apply failed: " + String(error) };
+         }
+         const video = store.media.camera;
+         return {
+           path: result.camera.path,
+           duration: result.camera.duration,
+           width: video?.videoWidth || 0,
+           height: video?.videoHeight || 0,
+           offset: store.document.media.camera.offset ?? null,
+         };
+       })()`
+    );
+    record("IPC 替换摄像头成功", !replaced?.error, replaced?.error || replaced?.path);
+    record(
+      "新摄像头素材可解码",
+      (replaced?.width || 0) > 0,
+      `${replaced?.width}x${replaced?.height}`
+    );
+    record(
+      "offset 归零（新时间零点）",
+      replaced?.offset === null || replaced?.offset === 0,
+      String(replaced?.offset)
+    );
+    const replacementPath = replaced?.path || "";
+    record(
+      "路径形如 media/camera-replacement-<uuid>/camera.mp4",
+      /^media\/camera-replacement-[0-9a-f-]+\/camera\.mp4$/.test(replacementPath),
+      replacementPath
+    );
+
+    /* project.json must carry the new reference after applyCameraReplacement's
+       save. The write is awaited inside the probe already; small grace period
+       for the atomic rename. */
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    let onDisk = null;
+    try {
+      onDisk = JSON.parse(await fsp.readFile(path.join(packagePath, "project.json"), "utf8"));
+    } catch {
+      /* reported below */
+    }
+    record(
+      "project.json 已保存新引用",
+      Boolean(onDisk) && onDisk.media?.camera?.path === replacementPath,
+      onDisk?.media?.camera?.path || "(unreadable)"
+    );
+    record(
+      "新素材文件已进入项目包",
+      Boolean(replacementPath) && fs.existsSync(path.join(packagePath, replacementPath))
+    );
+
+    /* Export side with the live document's references. */
+    const refs = await editor.webContents.executeJavaScript(
+      `(() => {
+         const doc = window.__dogscStore?.document;
+         return {
+           title: doc?.name || "probe",
+           references: {
+             screen: doc?.media?.screen?.path || null,
+             camera: doc?.media?.camera?.path || null,
+             microphone: doc?.media?.microphone?.path || null,
+           },
+         };
+       })()`
+    );
+    try {
+      const folder = await mediaExchange.exportSources({
+        packagePath,
+        title: refs.title,
+        parent: workDir,
+        references: refs.references,
+      });
+      const files = fs.readdirSync(folder);
+      record(
+        "导出源文件：屏幕 / 摄像头（麦克风未录制则跳过）",
+        files.includes("屏幕.mp4") && files.includes("摄像头.mp4") && !files.includes("麦克风.mp4"),
+        files.join(", ")
+      );
+      record(
+        "导出源文件：摄像头为替换后的文件",
+        fs.readFileSync(path.join(folder, "摄像头.mp4")).equals(
+          fs.readFileSync(path.join(packagePath, replacementPath))
+        )
+      );
+    } catch (error) {
+      record("导出源文件", false, String(error?.message || error));
+    }
+
+    /* UI surface: the Project menu lists both actions enabled; 粘贴图片
+       follows the clipboard (disabled while empty, enabled and functional
+       once an image is present). The probe's clipboard writes are restored. */
+    const previousClipboardImage = clipboard.readImage();
+    const hadPreviousClipboard = Boolean(
+      previousClipboardImage && !previousClipboardImage.isEmpty()
+    );
+    clipboard.clear();
+    const menuCheck = await editor.webContents.executeJavaScript(
+      `(async () => {
+         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+         const items = () => Array.from(document.querySelectorAll(".popover .menu-item")).map((row) => ({
+           text: row.textContent.trim(),
+           disabled: row.style.pointerEvents === "none",
+         }));
+         const closeMenu = () => document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+         const out = {};
+
+         document.getElementById("project-title").click();
+         await sleep(90);
+         const projectMenu = items();
+         out.projectSource = projectMenu.find((i) => i.text.startsWith("导出项目源文件")) || null;
+         out.projectCamera = projectMenu.find((i) => i.text.startsWith("替换当前项目摄像头")) || null;
+         closeMenu();
+         await sleep(90);
+
+         document.getElementById("canvas-add").click();
+         await sleep(150);
+         const addMenu = items();
+         out.pasteEmpty = addMenu.find((i) => i.text.startsWith("粘贴图片")) || null;
+         closeMenu();
+         await sleep(90);
+         return out;
+       })()`
+    );
+    record(
+      "项目菜单：导出项目源文件…（启用）",
+      Boolean(menuCheck.projectSource) && !menuCheck.projectSource.disabled,
+      JSON.stringify(menuCheck.projectSource)
+    );
+    record(
+      "项目菜单：替换当前项目摄像头…（启用）",
+      Boolean(menuCheck.projectCamera) && !menuCheck.projectCamera.disabled,
+      JSON.stringify(menuCheck.projectCamera)
+    );
+    record(
+      "添加菜单：剪贴板为空时粘贴图片禁用",
+      Boolean(menuCheck.pasteEmpty) && menuCheck.pasteEmpty.disabled,
+      JSON.stringify(menuCheck.pasteEmpty)
+    );
+
+    const { nativeImage } = require("electron");
+    const pngPath = path.join(workDir, "pasted.png");
+    await runFfmpegOrThrow([
+      "-y", "-f", "lavfi", "-i", "testsrc=size=64x64:rate=1", "-frames:v", "1", pngPath,
+    ]);
+    clipboard.writeImage(nativeImage.createFromPath(pngPath));
+    const pasteRun = await editor.webContents.executeJavaScript(
+      `(async () => {
+         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+         const store = window.__dogscStore;
+         const before = store.document.timeline.stickerClips.length;
+         document.getElementById("canvas-add").click();
+         await sleep(160);
+         const row = Array.from(document.querySelectorAll(".popover .menu-item"))
+           .find((item) => item.textContent.trim().startsWith("粘贴图片"));
+         const state = row ? { disabled: row.style.pointerEvents === "none" } : null;
+         if (row && !state.disabled) row.click();
+         await sleep(1400);
+         const clips = store.document.timeline.stickerClips;
+         return {
+           state,
+           before,
+           after: clips.length,
+           sourceExists: Boolean(clips.at(-1)?.source) &&
+             Boolean(store.stickers.get(clips.at(-1).source)),
+         };
+       })()`
+    );
+    record(
+      "添加菜单：剪贴板有图时粘贴图片启用",
+      Boolean(pasteRun.state) && !pasteRun.state.disabled,
+      JSON.stringify(pasteRun.state)
+    );
+    record(
+      "粘贴图片：导入贴图并添加到播放头",
+      pasteRun.after === pasteRun.before + 1 && pasteRun.sourceExists,
+      `${pasteRun.before} → ${pasteRun.after}, sticker loaded=${pasteRun.sourceExists}`
+    );
+    if (hadPreviousClipboard) clipboard.writeImage(previousClipboardImage);
+    else clipboard.clear();
+
+    if (!editor.isDestroyed()) editor.destroy();
+  } catch (error) {
+    record("probe 执行", false, String(error?.message || error));
+  }
+
+  const failed = results.filter((result) => !result).length;
+  console.log(
+    `[media-exchange-probe] ${failed === 0 ? "PASS" : "FAIL"} (${results.length - failed}/${results.length})`
+  );
 }
 
 /**

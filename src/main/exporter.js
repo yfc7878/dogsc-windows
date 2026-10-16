@@ -428,9 +428,58 @@ async function probeDuration(filePath) {
   });
 }
 
+/**
+ * Stream inventory for an external media file, parsed from `ffmpeg -i`.
+ *
+ * The macOS original gates camera replacement on AVFoundation reporting at
+ * least one video track and a positive duration. ffmpeg's banner carries the
+ * same facts, and using the ffmpeg that the export pipeline already requires
+ * keeps the check on the same decoder that will read the file afterwards.
+ *
+ * @returns {Promise<{duration: number|null, videoCodec: string|null,
+ *   audioCodec: string|null, width: number|null, height: number|null}|null>}
+ *   `null` when ffmpeg cannot be spawned at all.
+ */
+async function probeMedia(filePath) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(ffmpegPath(), ["-i", filePath, "-hide_banner"], {
+        windowsHide: true,
+        env: childEnv(),
+      });
+    } catch {
+      resolve(null);
+      return;
+    }
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      if (stderr.length > 64000) stderr = stderr.slice(-32000);
+    });
+    child.on("close", () => {
+      const durationMatch = /Duration: (\d+):(\d+):(\d+(?:\.\d+)?)/.exec(stderr);
+      const duration = durationMatch
+        ? Number(durationMatch[1]) * 3600 + Number(durationMatch[2]) * 60 + Number(durationMatch[3])
+        : null;
+      const videoMatch = /Stream #\d+:\d+.*?: Video: ([a-zA-Z0-9_]+)/.exec(stderr);
+      const audioMatch = /Stream #\d+:\d+.*?: Audio: ([a-zA-Z0-9_]+)/.exec(stderr);
+      const sizeMatch = /Video:.*?, (\d{2,5})x(\d{2,5})/.exec(stderr);
+      resolve({
+        duration,
+        videoCodec: videoMatch ? videoMatch[1].toLowerCase() : null,
+        audioCodec: audioMatch ? audioMatch[1].toLowerCase() : null,
+        width: sizeMatch ? Number(sizeMatch[1]) : null,
+        height: sizeMatch ? Number(sizeMatch[2]) : null,
+      });
+    });
+    child.on("error", () => resolve(null));
+  });
+}
+
 module.exports = {
   ffmpegPath,
-  finalizeRecording,
   finalizeRecording,
   runFfmpeg,
   renderAudio,
@@ -440,5 +489,6 @@ module.exports = {
   exportAudioOnly,
   grabThumbnail,
   probeDuration,
+  probeMedia,
   buildAudioGraph,
 };

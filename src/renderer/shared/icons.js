@@ -24,6 +24,7 @@ const P = {
   grid: `<rect x="3.4" y="3.4" width="17.2" height="17.2" rx="2.4"/><path d="M9.1 3.4v17.2M14.9 3.4v17.2M3.4 9.1h17.2M3.4 14.9h17.2"/>`,
   wave: `<rect x="2.6" y="5" width="18.8" height="14" rx="2.6"/><path d="M5.6 12h1.8l1.4-3.4 2 6.8 1.8-4.6 1.3 2.4h3.9" stroke-linecap="round" stroke-linejoin="round"/>`,
   photoPlus: `<rect x="2.6" y="6.4" width="15.2" height="13.2" rx="2.6"/><path d="M3 16.6l4.4-4 3.4 3 3-2.6 3.8 3.4"/><path d="M19 4.2v5.6M16.2 7h5.6" stroke-linecap="round"/>`,
+  clipboard: `<rect x="5.4" y="4.6" width="13.2" height="16" rx="2.4"/><path d="M9.2 4.6V3.4a1.5 1.5 0 0 1 1.5-1.5h2.6a1.5 1.5 0 0 1 1.5 1.5v1.2z"/><path d="M9.2 11.4h5.6M9.2 15.2h3.6" stroke-linecap="round"/>`,
 
   /* ---- Recorder source types ---- */
   display: `<rect x="2.4" y="4.4" width="19.2" height="12.6" rx="2.2"/><path d="M8.4 20.2h7.2M12 17v3.2" stroke-linecap="round"/>`,

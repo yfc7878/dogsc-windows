@@ -125,8 +125,15 @@ contextBridge.exposeInMainWorld("dogsc", {
     pickFile: (options) => invoke("project:pick-file", options),
     pickSaveFile: (options) => invoke("project:pick-save-file", options),
     importFile: (options) => invoke("project:import-file", options),
+    replaceCamera: (payload) => invoke("project:replace-camera", payload),
+    exportSources: (payload) => invoke("project:export-sources", payload),
     mediaUrl: (payload) => invoke("project:media-url", payload),
     tempPath: (name) => invoke("project:temp-path", name),
+  },
+
+  clipboard: {
+    hasImage: () => invoke("clipboard:has-image"),
+    readImage: () => invoke("clipboard:read-image"),
   },
 
   exporter: {

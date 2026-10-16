@@ -572,6 +572,33 @@ class EditorStore {
     return result.relative;
   }
 
+  /**
+   * Publishes a camera replacement, the port of the original's
+   * `importCameraReplacement` completion step. The replacement declares its
+   * own time zero, so no startup `offset` is carried over. The media is
+   * reloaded before the document is flushed; if Chromium cannot actually
+   * decode the new file the previous reference is restored and an error is
+   * raised, so a broken camera never reaches the saved project.
+   */
+  async applyCameraReplacement(camera) {
+    if (!this.document?.media) throw new Error("no-media");
+    const previous = this.document.media.camera ?? null;
+    this.document.media.camera = camera;
+    this.markDirty();
+    await this.loadMedia();
+    const video = this.media.camera;
+    if (!video || !video.videoWidth) {
+      if (previous) this.document.media.camera = previous;
+      else delete this.document.media.camera;
+      await this.loadMedia();
+      this.notify("load");
+      throw new Error("decode-failed");
+    }
+    this.notify("load");
+    await this.save();
+    return camera;
+  }
+
   /* --------------------------------------------------------------------- */
   /* Selection helpers                                                     */
   /* --------------------------------------------------------------------- */
