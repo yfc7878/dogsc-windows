@@ -4,6 +4,8 @@ Windows 移植版 [DogSC](https://github.com/laogou717/dogsc) —— 屏幕录�
 
 录制、剪辑、运镜，到导出成片。功能、界面布局、交互方式与使用体验对齐 macOS 原版。
 
+**English** — Unofficial Windows port of [DogSC](https://github.com/laogou717/dogsc), the macOS screen recorder with lightweight editing: screen / window / area recording, zoom and camera moves, cursor effects, 3D screen motion, backgrounds, mockups, and export. Features, layout and feel follow the original. This is a development build — usable, but not guaranteed stable, and not an official release of the original author. No prebuilt binaries; run it from source (see below).
+
 > ## ⚠️ 开发版提示（请先阅读）
 >
 > - 这是一个正在持续开发中的移植版本，**功能可用但不保证稳定**，可能仍有未发现的 bug（导出、录制、光标等模块都在近期修复过多轮）。
