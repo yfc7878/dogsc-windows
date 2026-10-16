@@ -16,6 +16,7 @@ const { spawn } = require("child_process");
 const { screen } = require("electron");
 const { childEnv } = require("./child-env");
 const { resolveScript } = require("./paths");
+const { mergeCursorShapes } = require("./pointer-shapes");
 
 const SAMPLE_INTERVAL_MS = 16; // ~60 Hz, matching the original's sampling
 const MOVE_EPSILON = 0.6; // physical px; filters cursor jitter when idle
@@ -32,6 +33,8 @@ class PointerTracker {
 
     this.samples = [];
     this.clicks = [];
+    this.shapeEvents = [];
+    this.lastShape = null;
     this.capturing = false;
     this.sampleTimer = null;
     this.originMs = 0;
@@ -69,7 +72,7 @@ class PointerTracker {
             this.scriptPath,
           ],
           /* A trimmed environment: Windows rejects an oversized block. */
-          { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, env: childEnv() }
+          { stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: childEnv() }
         );
       } catch (error) {
         console.error("[pointer] failed to spawn observer", error);
@@ -125,6 +128,16 @@ class PointerTracker {
     }
     if (!this.capturing) return;
 
+    if (event.kind === "shape") {
+      /* Sparse cursor-shape track, same encoding as the original's
+         `recordedCursorAssetID`: a value is stored only where it changes. */
+      if (event.shape && event.shape !== this.lastShape) {
+        this.lastShape = event.shape;
+        this.shapeEvents.push({ t: this.now(), shape: event.shape });
+      }
+      return;
+    }
+
     if (event.kind === "down") {
       this.clicks.push({
         t: this.now(),
@@ -169,12 +182,25 @@ class PointerTracker {
     this.displayRect = displayRect;
     this.samples = [];
     this.clicks = [];
+    this.shapeEvents = [];
+    this.lastShape = null;
     this.originMs = Date.now();
     this.lastPoint = null;
     this.capturing = true;
     await this.start();
+    /* The observer reports shape *changes*; ask for the current one so a
+       capture that starts on the same cursor still opens with a value. */
+    this.requestShape();
     this.tick();
     this.sampleTimer = setInterval(() => this.tick(), SAMPLE_INTERVAL_MS);
+  }
+
+  requestShape() {
+    try {
+      this.child?.stdin?.write("shape\n");
+    } catch {
+      /* the observer may already be gone */
+    }
   }
 
   tick() {
@@ -209,10 +235,11 @@ class PointerTracker {
     const width = rect ? rect.width : 1920;
     const height = rect ? rect.height : 1080;
 
-    const samples = this.samples.map((s) => ({
+    const samples = mergeCursorShapes(this.samples, this.shapeEvents).map((s) => ({
       t: s.t,
       x: (s.x - origin.x) / width,
       y: (s.y - origin.y) / height,
+      ...(s.cursor ? { cursor: s.cursor } : {}),
     }));
     const clicks = this.clicks.map((c) => ({
       t: c.t,
@@ -225,6 +252,8 @@ class PointerTracker {
     const originMs = this.originMs;
     this.samples = [];
     this.clicks = [];
+    this.shapeEvents = [];
+    this.lastShape = null;
     this.displayRect = null;
     this.originMs = 0;
     /* originMs is the wall-clock start of the track: the screen-capture

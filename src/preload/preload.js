@@ -136,6 +136,12 @@ contextBridge.exposeInMainWorld("dogsc", {
     readImage: () => invoke("clipboard:read-image"),
   },
 
+  cursor: {
+    /* System cursor artwork (arrow / hand / I-beam / crosshair / forbidden)
+       extracted from Windows, equivalent to the original's NSCursor images. */
+    assets: () => invoke("cursor:assets"),
+  },
+
   exporter: {
     capabilities: () => invoke("export:capabilities"),
     begin: (payload) => invoke("export:begin", payload),

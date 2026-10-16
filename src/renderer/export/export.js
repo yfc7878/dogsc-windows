@@ -20,6 +20,7 @@ import {
   toast,
 } from "../shared/widgets.js";
 import { renderFrame, resolveCanvasSize } from "../editor/js/frame-renderer.js";
+import { loadCursorAssets } from "../shared/cursor-assets.js";
 import {
   clipDuration,
   normalizeDocument,
@@ -72,6 +73,8 @@ const state = {
   backgroundImage: null,
   backgroundVideo: null,
   stickers: new Map(),
+  /* System cursor sprites, so the exported cursor matches the preview. */
+  cursorAssets: new Map(),
   content: "video",
   resolution: "1080p",
   fps: 60,
@@ -311,6 +314,7 @@ function compositeSources() {
     backgroundImage: state.backgroundImage,
     backgroundVideo: state.backgroundVideo,
     stickers: state.stickers,
+    cursorAssets: state.cursorAssets,
   };
 }
 
@@ -540,6 +544,11 @@ async function start() {
 
   const extension = state.content === "audio" ? "m4a" : "mp4";
   state.outputPath = `${state.folder}\\${name}.${extension}`;
+
+  /* Cursor sprites are needed before the first composited frame. */
+  if (!state.cursorAssets?.size) {
+    state.cursorAssets = await loadCursorAssets();
+  }
 
   state.exporting = true;
   state.cancelled = false;

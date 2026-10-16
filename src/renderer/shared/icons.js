@@ -11,6 +11,13 @@ const P = {
   opening: `<rect x="3" y="8" width="14" height="12" rx="2.4"/><path d="M6.5 5.6h11a2.4 2.4 0 0 1 2.4 2.4v9"/><path d="M15.6 2.6l1.1 1.9 2 .7-1.5 1.5.2 2.1-1.8-1-1.9 1 .3-2.1-1.5-1.5 2-.7z"/>`,
   viewfinder: `<circle cx="12" cy="12" r="3.1"/><path d="M3.6 8.2V5.6a2 2 0 0 1 2-2h2.6M15.8 3.6h2.6a2 2 0 0 1 2 2v2.6M20.4 15.8v2.6a2 2 0 0 1-2 2h-2.6M8.2 20.4H5.6a2 2 0 0 1-2-2v-2.6"/>`,
   cursor: `<path d="M6.4 3.4l11.2 6.9-4.9 1.1-1.6 4.9z" fill="currentColor" stroke="none"/><path d="M15.6 15.2l3.4 5.4M19.8 13.6l3 2.1M13 19.8l2.1 3" stroke-linecap="round"/>`,
+  cursorHand: `<path d="M9.4 11.8V4.6a1.35 1.35 0 0 1 2.7 0v4.9"/><path d="M12.1 9.5l3.3.9a2.1 2.1 0 0 1 1.5 2.5l-.8 3.9a2.1 2.1 0 0 1-2.1 1.7h-2.6a2.6 2.6 0 0 1-1.9-.8l-3.4-3.7a1.5 1.5 0 0 1 2.1-2.1l1.2 1.2" stroke-linejoin="round"/>`,
+  cursorIbeam: `<path d="M8.4 4.4h7.2M8.4 19.6h7.2M12 4.4v15.2" stroke-linecap="round"/>`,
+  cursorCross: `<circle cx="12" cy="12" r="1.7"/><path d="M12 3.2v6.1M12 14.7v6.1M3.2 12h6.1M14.7 12h6.1" stroke-linecap="round"/>`,
+  cursorOpenHand: `<path d="M6.9 12V7.3a1.2 1.2 0 0 1 2.4 0v3.1M9.3 10.4V5.5a1.2 1.2 0 0 1 2.4 0v4.9M11.7 10.4V5.2a1.2 1.2 0 0 1 2.4 0v5.2M14.1 10.8V7a1.2 1.2 0 0 1 2.4 0v6.1" stroke-linecap="round"/><path d="M16.5 13.4v1.9a4.7 4.7 0 0 1-4.7 4.7h-1.2a4.6 4.6 0 0 1-3.4-1.5l-2.6-2.9a1.3 1.3 0 0 1 1.8-1.9l2.5 2.2" stroke-linejoin="round"/>`,
+  cursorClosedHand: `<path d="M7.1 10.4a1.3 1.3 0 0 1 2.6 0M9.7 9.8a1.3 1.3 0 0 1 2.6 0M12.3 10a1.3 1.3 0 0 1 2.6 0M14.9 10.6a1.3 1.3 0 0 1 2.6 0" stroke-linecap="round"/><path d="M7.1 10.6h10.4a3.4 3.4 0 0 1 0 6.8H9.5a3.4 3.4 0 0 1-2.4-1v-5.8z" stroke-linejoin="round"/><path d="M9.4 17.4v1a1.5 1.5 0 0 0 1.5 1.5h3.4a1.5 1.5 0 0 0 1.5-1.5v-1" stroke-linecap="round"/>`,
+  cursorNo: `<circle cx="12" cy="12" r="8.4"/><path d="M6.3 6.3l11.4 11.4" stroke-linecap="round"/>`,
+  cursorDot: `<circle cx="12" cy="12" r="8.2"/><circle cx="12" cy="12" r="3.1" fill="currentColor" stroke="none"/>`,
   camera: `<rect x="2.6" y="6.4" width="13.2" height="11.2" rx="2.6"/><path d="M15.8 12.2l5.6-3.4v6.8l-5.6-3.4z" fill="currentColor" stroke="none"/>`,
   speaker: `<path d="M4 9.4h3.4L12 5.6v12.8l-4.6-3.8H4z" fill="currentColor" stroke="none"/><path d="M15.4 9a4.2 4.2 0 0 1 0 6M18.2 6.4a8 8 0 0 1 0 11.2" stroke-linecap="round"/>`,
 

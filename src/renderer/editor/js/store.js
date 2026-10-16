@@ -38,6 +38,8 @@ class EditorStore {
     this.backgroundImage = null;
     this.backgroundVideo = null;
     this.stickers = new Map();
+    /** System cursor sprites (arrow / hand / I-beam / …), loaded by the app. */
+    this.cursorAssets = new Map();
     this.listeners = new Set();
     this.zoom = 1;
     this.scrollLeft = 0;
@@ -216,6 +218,7 @@ class EditorStore {
       backgroundImage: this.backgroundImage,
       backgroundVideo: this.backgroundVideo,
       stickers: this.stickers,
+      cursorAssets: this.cursorAssets,
     };
   }
 

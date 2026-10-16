@@ -46,7 +46,11 @@ export function pointerEventsFrom(document) {
   let index = 0;
   for (const sample of track.samples || []) {
     if (Number.isFinite(sample.t) && Number.isFinite(sample.x) && Number.isFinite(sample.y)) {
-      events.push({ time: sample.t, x: sample.x, y: sample.y, kind: "move", index: index++ });
+      /* `cursor` is the sparse recorded shape (only where it changes), the
+         port of the original's `recordedCursorAssetID` per event. */
+      const event = { time: sample.t, x: sample.x, y: sample.y, kind: "move", index: index++ };
+      if (sample.cursor) event.cursor = sample.cursor;
+      events.push(event);
     }
   }
   for (const click of track.clicks || []) {
@@ -104,8 +108,23 @@ class PointerTrack {
     this.eventTimes = events.map((event) => event.time);
     this.clicks = events.filter(isClick);
     this.clickTimes = this.clicks.map((click) => click.time);
+    /* Sparse cursor-shape index, so shape lookups stay O(log n). */
+    this.cursorTimes = [];
+    this.cursorValues = [];
+    for (const event of events) {
+      if (event.cursor) {
+        this.cursorTimes.push(event.time);
+        this.cursorValues.push(event.cursor);
+      }
+    }
     this.springKey = null;
     this.spring = null;
+  }
+
+  /** The recorded shape in effect at `time` (null before the first change). */
+  lastCursorAt(time) {
+    const index = upperBound(this.cursorTimes, time);
+    return index > 0 ? this.cursorValues[index - 1] : null;
   }
 
   springSamples(motion) {
@@ -334,5 +353,8 @@ export function cursorStateAt(document, time) {
   const vx = (after.x - before.x) / (2 * h);
   const vy = (after.y - before.y) / (2 * h);
 
-  return { x: position.x, y: position.y, vx, vy, visible };
+  /* 录制中此刻显示的光标形状（"系统"样式跟随它切换）。 */
+  const cursor = track.lastCursorAt(target);
+
+  return { x: position.x, y: position.y, vx, vy, visible, cursor };
 }

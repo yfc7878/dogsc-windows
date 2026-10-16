@@ -41,6 +41,7 @@ const { PointerTracker, physicalRectForDisplay } = require("./input-hook");
 const projectIO = require("./project");
 const exporter = require("./exporter");
 const mediaExchange = require("./media-exchange");
+const cursorAssets = require("./cursor-assets");
 const screenCapture = require("./screen-capture");
 const desktopIcons = require("./desktop-icons");
 
@@ -810,6 +811,9 @@ function registerIpc() {
     await fsp.writeFile(target, png);
     return target;
   });
+
+  /* ---- System cursor artwork (the NSCursor equivalent) ---- */
+  ipcMain.handle("cursor:assets", () => cursorAssets.loadCursorAssets());
   ipcMain.handle("project:media-url", (_e, { packagePath, relative }) => {
     const absolute = projectIO.resolveMedia(packagePath, relative);
     if (!absolute) return null;
@@ -1094,6 +1098,10 @@ async function runSmokeTest(outputDir, projectPath) {
 
   if (process.env.DOGSC_MEDIA_EXCHANGE_PROBE) {
     await runMediaExchangeProbe(outputDir);
+  }
+
+  if (process.env.DOGSC_CURSOR_PROBE) {
+    await runCursorProbe(outputDir);
   }
 
   console.log(`[smoke] captured ${smokeShots.length} window(s)`);
@@ -1428,6 +1436,280 @@ async function runMediaExchangeProbe(outputDir) {
   const failed = results.filter((result) => !result).length;
   console.log(
     `[media-exchange-probe] ${failed === 0 ? "PASS" : "FAIL"} (${results.length - failed}/${results.length})`
+  );
+}
+
+/**
+ * End-to-end probe for the cursor system — the Windows port of the original's
+ * recorded cursor shapes (`recordedCursorAssetID` → `FrameScene.cursorScene`):
+ *
+ *   1. the Win32 observer reports ready + the current cursor shape;
+ *   2. a fixture project records four shapes on a stationary pointer over a
+ *      static screen, so rendered-frame differences come from the cursor
+ *      alone — "系统" must follow arrow → hand → I-beam → crosshair, a pinned
+ *      style must hold one shape, "始终隐藏" must remove the cursor;
+ *   3. the inspector lists every style and the effect-preview card plays.
+ *
+ * `DOGSC_CURSOR_PROBE=1` (with `DOGSC_SMOKE=<dir>`) enables it.
+ */
+async function runCursorProbe(outputDir) {
+  const results = [];
+  const record = (name, ok, detail) => {
+    results.push(ok);
+    console.log(
+      `[cursor-probe] ${ok ? "PASS" : "FAIL"} ${name}${detail ? ` — ${detail}` : ""}`
+    );
+  };
+
+  const workDir = path.join(outputDir, "cursor-probe");
+  await ensureDir(workDir);
+  const packagePath = path.join(workDir, "cursor-probe.dogscproject");
+  await fsp.rm(packagePath, { recursive: true, force: true }).catch(() => {});
+  await ensureDir(path.join(packagePath, "media"));
+
+  const runFfmpeg = (args) =>
+    new Promise((resolve, reject) => {
+      const child = require("child_process").spawn(exporter.ffmpegPath(), args, {
+        windowsHide: true,
+        env: childEnv(),
+      });
+      let stderr = "";
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr.slice(-300)))));
+      child.on("error", reject);
+    });
+
+  try {
+    /* 1. Observer: ready + shape reporting (the "shape" request forces an
+       answer even when the shape has not changed). */
+    const scriptPath = require("./paths").resolveScript("pointer-observer.ps1");
+    const output = await new Promise((resolve) => {
+      const child = require("child_process").spawn(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+        { windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: childEnv() }
+      );
+      let buffer = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        buffer += chunk;
+      });
+      setTimeout(() => {
+        try {
+          child.stdin.write("shape\n");
+        } catch {
+          /* observer may already be gone */
+        }
+      }, 3200);
+      setTimeout(() => {
+        try {
+          child.kill();
+        } catch {
+          /* already gone */
+        }
+        resolve(buffer);
+      }, 5400);
+    });
+    const events = output
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("{"))
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+    const shapes = events.filter((event) => event.kind === "shape").map((event) => event.shape);
+    record("观察器 ready", events.some((event) => event.kind === "ready"));
+    record("观察器报告光标形状", shapes.length >= 1, shapes.join(", "));
+
+    /* 2. Fixture: static screen, stationary pointer, four shapes. */
+    await runFfmpeg([
+      "-y", "-f", "lavfi", "-i", "color=c=0x232326:s=640x360:d=1.4:r=30",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", path.join(packagePath, "media", "screen.mp4"),
+    ]);
+    const screenSize = fs.statSync(path.join(packagePath, "media", "screen.mp4")).size;
+    const shapeAt = (t) =>
+      t < 0.4
+        ? "system.arrow"
+        : t < 0.75
+          ? "system.pointing-hand"
+          : t < 1.05
+            ? "system.ibeam"
+            : "system.crosshair";
+    const samples = [];
+    let lastShape = null;
+    for (let step = 0; step <= 26; step += 1) {
+      const t = Number((step * 0.05).toFixed(2));
+      const entry = { t, x: 0.5, y: 0.5 };
+      const shape = shapeAt(t);
+      if (shape !== lastShape) {
+        entry.cursor = shape;
+        lastShape = shape;
+      }
+      samples.push(entry);
+    }
+    await fsp.writeFile(
+      path.join(packagePath, "project.json"),
+      JSON.stringify(
+        {
+          schemaVersion: projectIO.SCHEMA_VERSION,
+          id: "dogsc-cursor-probe",
+          name: "cursor-probe",
+          createdAt: new Date().toISOString(),
+          capture: { kind: "display", sourceName: "probe", fps: 30 },
+          media: {
+            screen: {
+              path: "media/screen.mp4",
+              duration: 1.4,
+              size: screenSize,
+              width: 640,
+              height: 360,
+            },
+          },
+          pointerTrack: {
+            samples,
+            clicks: [{ t: 1.35, button: "left", delta: 0, x: 0.5, y: 0.5 }],
+          },
+          timeline: {
+            duration: 1.4,
+            primaryClips: [
+              { id: "clip-1", sourceStart: 0, sourceDuration: 1.4, startTime: 0, speed: 1 },
+            ],
+          },
+          cursorStyle: {
+            assetID: "system.automatic",
+            size: 2.5,
+            clickEffectStyle: "ripple",
+            clickOpacity: 1,
+            clickScale: 1,
+            motionTiltStrength: 2,
+            syncOffset: 0,
+          },
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const editor = windows.createEditor({ projectPath: packagePath });
+    await new Promise((resolve) => setTimeout(resolve, 7000));
+    const renderCheck = await editor.webContents.executeJavaScript(
+      `(async () => {
+         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+         const store = window.__dogscStore;
+         for (let i = 0; i < 50 && (!store.cursorAssets || store.cursorAssets.size === 0); i += 1) {
+           await sleep(100);
+         }
+         const { renderFrame } = await import("./js/frame-renderer.js");
+         const capture = (time) => {
+           const canvas = document.createElement("canvas");
+           canvas.width = 640;
+           canvas.height = 360;
+           const ctx = canvas.getContext("2d");
+           renderFrame(ctx, store.document, time, { width: 640, height: 360, sources: store.sources });
+           return ctx.getImageData(0, 0, 640, 360).data;
+         };
+         const diff = (a, b) => {
+           let count = 0;
+           for (let i = 0; i < a.length; i += 4) {
+             if (
+               Math.abs(a[i] - b[i]) > 12 ||
+               Math.abs(a[i + 1] - b[i + 1]) > 12 ||
+               Math.abs(a[i + 2] - b[i + 2]) > 12
+             ) count += 1;
+           }
+           return count;
+         };
+         const out = { assets: store.cursorAssets ? store.cursorAssets.size : 0 };
+
+         /* 自动跟随：四个时间点各自呈现一种录制形状。 */
+         const auto30 = capture(0.3);
+         const auto60 = capture(0.6);
+         const auto90 = capture(0.9);
+         const auto120 = capture(1.2);
+         out.autoArrowVsHand = diff(auto30, auto60);
+         out.autoHandVsIbeam = diff(auto60, auto90);
+         out.autoIbeamVsCross = diff(auto90, auto120);
+
+         /* 固定手型：两个时间点形状一致（画面相同），且与自动的箭头不同。 */
+         store.document.cursorStyle.assetID = "system.pointing-hand";
+         const pinned30 = capture(0.3);
+         const pinned60 = capture(0.6);
+         out.pinnedSame = diff(pinned30, pinned60);
+         out.pinnedVsAuto = diff(pinned30, auto30);
+
+         /* 始终隐藏：画面里没有光标。 */
+         store.document.cursorStyle.assetID = "system.hidden";
+         const hidden30 = capture(0.3);
+         out.hiddenVsAuto = diff(hidden30, auto30);
+
+         /* 还原并停在手型时刻供截图。 */
+         store.document.cursorStyle.assetID = "system.automatic";
+         store.playhead = 0.6;
+         return out;
+       })()`
+    );
+    record("系统光标贴图已加载（5 个）", renderCheck?.assets === 5, String(renderCheck?.assets));
+    record("跟随：箭头 ≠ 手型", (renderCheck?.autoArrowVsHand || 0) > 150, String(renderCheck?.autoArrowVsHand));
+    record("跟随：手型 ≠ I 型", (renderCheck?.autoHandVsIbeam || 0) > 150, String(renderCheck?.autoHandVsIbeam));
+    record("跟随：I 型 ≠ 十字", (renderCheck?.autoIbeamVsCross || 0) > 150, String(renderCheck?.autoIbeamVsCross));
+    record("固定手型：两个时刻一致", (renderCheck?.pinnedSame ?? 9999) < 60, String(renderCheck?.pinnedSame));
+    record("固定手型：与箭头不同", (renderCheck?.pinnedVsAuto || 0) > 150, String(renderCheck?.pinnedVsAuto));
+    record("始终隐藏：无光标", (renderCheck?.hiddenVsAuto || 0) > 150, String(renderCheck?.hiddenVsAuto));
+
+    /* 3. Inspector: every style + the effect preview. */
+    const uiCheck = await editor.webContents.executeJavaScript(
+      `(async () => {
+         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+         const out = {};
+         const railButtons = Array.from(document.querySelectorAll(".rail-button"));
+         const cursorButton = railButtons.find((button) => button.textContent.includes("光标"));
+         out.hasRail = Boolean(cursorButton);
+         if (cursorButton) {
+           cursorButton.click();
+           await sleep(400);
+         }
+         out.styleCards = document.querySelectorAll("#cursor-asset-grid .preset-card").length;
+         const preview = document.getElementById("cursor-preview");
+         out.hasPreview = Boolean(preview);
+         out.previewDisabled = preview ? preview.disabled : null;
+         if (preview && !preview.disabled) {
+           const canvas = preview.querySelector("canvas");
+           out.previewSize = canvas ? [canvas.width, canvas.height] : null;
+           preview.click();
+           await sleep(350);
+           out.clicked = true;
+         }
+         return out;
+       })()`
+    );
+    record("光标面板：10 个样式可选", uiCheck?.styleCards === 10, String(uiCheck?.styleCards));
+    record(
+      "效果预览卡存在、可播放",
+      Boolean(uiCheck?.hasPreview) && uiCheck?.clicked === true && Boolean(uiCheck?.previewSize),
+      JSON.stringify(uiCheck)
+    );
+    await shoot("08-cursor-inspector", editor, 600);
+
+    /* Canvas screenshot of the rendered hand cursor for visual review. */
+    await editor.webContents.executeJavaScript(`(() => { window.__dogscStore.playhead = 0.6; return true; })()`);
+    await shoot("09-cursor-rendered-frame", editor, 500);
+
+    if (!editor.isDestroyed()) editor.destroy();
+  } catch (error) {
+    record("probe 执行", false, String(error?.message || error));
+  }
+
+  const failed = results.filter((result) => !result).length;
+  console.log(
+    `[cursor-probe] ${failed === 0 ? "PASS" : "FAIL"} (${results.length - failed}/${results.length})`
   );
 }
 

@@ -1366,7 +1366,66 @@ function projectedLocalScale(map, u, v, rect) {
   return Math.min(Math.max(scale, 0.35), 2.5);
 }
 
-function drawCursor(ctx, document, time, width, height, screenRect) {
+/**
+ * Paints one click-feedback effect at a canvas point. Shared by the live
+ * renderer and the inspector's effect preview, so both always agree.
+ *
+ * @param {number} progress 0 → just clicked, 1 → effect finished
+ */
+export function drawClickEffect(ctx, effect, progress, cx, cy, size, { color, opacity, scale }) {
+  ctx.save();
+  ctx.globalAlpha = (1 - progress) * opacity;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  const base = size * 1.6 * scale;
+  if (effect === "glow") {
+    const radius = base * (0.6 + progress * 1.3);
+    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+    glow.addColorStop(0, hexToRgba(color, 0.55 * (1 - progress)));
+    glow.addColorStop(1, hexToRgba(color, 0));
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, TAU);
+    ctx.fill();
+  } else if (effect === "pulse") {
+    ctx.lineWidth = Math.max(1.4, size * 0.09);
+    for (let ring = 0; ring < 2; ring += 1) {
+      const ringProgress = Math.max(0, Math.min(1, progress - ring * 0.16));
+      ctx.globalAlpha = (1 - ringProgress) * opacity * 0.9;
+      ctx.beginPath();
+      ctx.arc(cx, cy, base * (0.3 + ringProgress * 1.1), 0, TAU);
+      ctx.stroke();
+    }
+  } else if (effect === "burst") {
+    ctx.lineWidth = Math.max(1.2, size * 0.075);
+    const radius = base * (0.2 + progress * 0.6);
+    for (let spoke = 0; spoke < 8; spoke += 1) {
+      const angle = (spoke / 8) * TAU + progress * 0.6;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius);
+      ctx.lineTo(cx + Math.cos(angle) * radius * 1.7, cy + Math.sin(angle) * radius * 1.7);
+      ctx.stroke();
+    }
+  } else {
+    ctx.lineWidth = Math.max(1.6, size * 0.1);
+    ctx.beginPath();
+    ctx.arc(cx, cy, base * (0.25 + progress * 1.2), 0, TAU);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/**
+ * The theme colour a cursor asset contributes to click feedback. The original
+ * resolves a click colour as `user choice ?? asset theme colour`
+ * (`FrameScene.clickColor`), so "follow the cursor theme" means: warm neutral
+ * by default, red for the forbidden cursor.
+ */
+export function cursorThemeColor(assetID) {
+  return assetID === "system.not-allowed" ? "#FF6464" : "#EDA647";
+}
+
+function drawCursor(ctx, document, time, width, height, screenRect, sources) {
   const style = document.cursorStyle;
   if (style.assetID === "system.hidden") return;
 
@@ -1386,6 +1445,16 @@ function drawCursor(ctx, document, time, width, height, screenRect) {
 
   const baseSize = Math.max(10, height * 0.028 * style.size);
 
+  /* The style decides the shape: "system" follows the recorded cursor as it
+     changed, any pinned choice fixes one asset — the exact switch the
+     original's `cursorScene` performs. Kept ahead of the click feedback so
+     the feedback colour can follow the active cursor's theme. */
+  const assetID =
+    style.assetID === "system.automatic"
+      ? state.cursor || "system.arrow"
+      : style.assetID;
+  const clickColor = style.clickColor || cursorThemeColor(assetID);
+
   /* Click feedback is drawn beneath the pointer body. */
   for (const click of clicksAround(document, time)) {
     const local = (time - (style.syncOffset || 0)) - click.t;
@@ -1393,50 +1462,11 @@ function drawCursor(ctx, document, time, width, height, screenRect) {
     const definition = CLICK_EFFECT_DURATION[effect] || 0.36;
     const progress = Math.max(0, Math.min(1, local / definition));
     const clickAnchor = cursorAnchor(document, screenRect, click.x, click.y);
-    const cx = clickAnchor.x;
-    const cy = clickAnchor.y;
-    const size = baseSize * clickAnchor.scale;
-    const color = style.clickColor || "#F2F0EA";
-    ctx.save();
-    ctx.globalAlpha = (1 - progress) * style.clickOpacity;
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    const base = size * 1.6 * style.clickScale;
-    if (effect === "glow") {
-      const radius = base * (0.6 + progress * 1.3);
-      const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
-      glow.addColorStop(0, hexToRgba(color, 0.55 * (1 - progress)));
-      glow.addColorStop(1, hexToRgba(color, 0));
-      ctx.fillStyle = glow;
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, 0, TAU);
-      ctx.fill();
-    } else if (effect === "pulse") {
-      ctx.lineWidth = Math.max(1.4, size * 0.09);
-      for (let ring = 0; ring < 2; ring += 1) {
-        const ringProgress = Math.max(0, Math.min(1, progress - ring * 0.16));
-        ctx.globalAlpha = (1 - ringProgress) * style.clickOpacity * 0.9;
-        ctx.beginPath();
-        ctx.arc(cx, cy, base * (0.3 + ringProgress * 1.1), 0, TAU);
-        ctx.stroke();
-      }
-    } else if (effect === "burst") {
-      ctx.lineWidth = Math.max(1.2, size * 0.075);
-      const radius = base * (0.2 + progress * 0.6);
-      for (let spoke = 0; spoke < 8; spoke += 1) {
-        const angle = (spoke / 8) * TAU + progress * 0.6;
-        ctx.beginPath();
-        ctx.moveTo(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius);
-        ctx.lineTo(cx + Math.cos(angle) * radius * 1.7, cy + Math.sin(angle) * radius * 1.7);
-        ctx.stroke();
-      }
-    } else {
-      ctx.lineWidth = Math.max(1.6, size * 0.1);
-      ctx.beginPath();
-      ctx.arc(cx, cy, base * (0.25 + progress * 1.2), 0, TAU);
-      ctx.stroke();
-    }
-    ctx.restore();
+    drawClickEffect(ctx, effect, progress, clickAnchor.x, clickAnchor.y, baseSize * clickAnchor.scale, {
+      color: clickColor,
+      opacity: style.clickOpacity,
+      scale: style.clickScale,
+    });
   }
 
   /* The sprite itself follows the projection's local foreshortening, so on a
@@ -1452,7 +1482,24 @@ function drawCursor(ctx, document, time, width, height, screenRect) {
   const swing = Math.max(-1, Math.min(1, (point.vx || 0) * 6)) * (style.motionTiltStrength / 4);
   ctx.rotate(swing * 0.28);
 
-  if (style.assetID === "system.touch-dot") {
+  drawCursorShape(ctx, assetID, size, sources?.cursorAssets);
+
+  ctx.restore();
+  void speed;
+}
+
+/**
+ * Draws one cursor style with the hotspot at the origin.
+ *
+ * System sprites come from Windows itself (`cursor-assets.ps1`), scaled with
+ * the measured hotspot so the click point stays exact. Inverted sprites
+ * (I-beam, crosshair) blend with `difference`, which is how Windows shows
+ * them over arbitrary content. Everything else is vector artwork — used when
+ * a sprite is unavailable, and for the hand styles Windows has no equivalent
+ * of.
+ */
+export function drawCursorShape(ctx, assetID, size, cursorAssets) {
+  if (assetID === "system.touch-dot") {
     ctx.fillStyle = "rgba(255,255,255,0.28)";
     ctx.beginPath();
     ctx.arc(0, 0, size * 0.9, 0, TAU);
@@ -1466,47 +1513,29 @@ function drawCursor(ctx, document, time, width, height, screenRect) {
     ctx.beginPath();
     ctx.arc(0, 0, size * 0.9, 0, TAU);
     ctx.stroke();
-    ctx.restore();
+    return;
+  }
+  if (assetID === "system.hidden") return;
+
+  const asset = cursorAssets?.get?.(assetID) || null;
+  if (asset?.image) {
+    const drawHeight = size * 2.4;
+    const drawWidth = drawHeight * (asset.width / Math.max(asset.height, 1));
+    const dx = -(asset.hotspotX / Math.max(asset.width, 1)) * drawWidth;
+    const dy = -(asset.hotspotY / Math.max(asset.height, 1)) * drawHeight;
+    if (asset.mode === "invert") {
+      ctx.save();
+      ctx.globalCompositeOperation = "difference";
+      ctx.drawImage(asset.image, dx, dy, drawWidth, drawHeight);
+      ctx.restore();
+      return;
+    }
+    ctx.drawImage(asset.image, dx, dy, drawWidth, drawHeight);
     return;
   }
 
-  const drawArrow = (scale) => {
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(0, size * 1.42);
-    ctx.lineTo(size * 0.36, size * 1.06);
-    ctx.lineTo(size * 0.62, size * 1.66);
-    ctx.lineTo(size * 0.86, size * 1.54);
-    ctx.lineTo(size * 0.6, size * 0.96);
-    ctx.lineTo(size * 1.0, size * 0.92);
-    ctx.closePath();
-    ctx.fillStyle = "#ffffff";
-    ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.62)";
-    ctx.lineWidth = Math.max(1, size * 0.075);
-    ctx.stroke();
-  };
-
-  if (style.assetID === "system.pointing-hand") {
-    ctx.beginPath();
-    ctx.roundRect
-      ? ctx.roundRect(-size * 0.12, -size * 0.1, size * 0.62, size * 1.1, size * 0.22)
-      : ctx.rect(-size * 0.12, -size * 0.1, size * 0.62, size * 1.1);
-    ctx.fillStyle = "#fff";
-    ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.6)";
-    ctx.lineWidth = Math.max(1, size * 0.07);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(size * 0.5, size * 0.36);
-    ctx.lineTo(size * 1.0, size * 0.16);
-    ctx.lineTo(size * 1.0, size * 0.62);
-    ctx.lineTo(size * 0.5, size * 0.68);
-    ctx.closePath();
-    ctx.fillStyle = "#fff";
-    ctx.fill();
-    ctx.stroke();
-  } else if (style.assetID === "system.crosshair") {
+  /* Vector fallbacks. */
+  if (assetID === "system.crosshair") {
     ctx.strokeStyle = "rgba(255,255,255,0.95)";
     ctx.lineWidth = Math.max(1.6, size * 0.12);
     ctx.beginPath();
@@ -1520,12 +1549,127 @@ function drawCursor(ctx, document, time, width, height, screenRect) {
     ctx.beginPath();
     ctx.arc(0, 0, size * 0.42, 0, TAU);
     ctx.stroke();
-  } else {
-    drawArrow(size);
+    return;
+  }
+  if (
+    assetID === "system.pointing-hand" ||
+    assetID === "system.open-hand" ||
+    assetID === "system.closed-hand"
+  ) {
+    drawHandCursor(ctx, size, assetID);
+    return;
+  }
+  drawArrowCursor(ctx, size);
+}
+
+/** The classic arrow, drawn cleanly for arbitrary sizes. */
+function drawArrowCursor(ctx, size) {
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(0, size * 1.42);
+  ctx.lineTo(size * 0.36, size * 1.06);
+  ctx.lineTo(size * 0.62, size * 1.66);
+  ctx.lineTo(size * 0.86, size * 1.54);
+  ctx.lineTo(size * 0.6, size * 0.96);
+  ctx.lineTo(size * 1.0, size * 0.92);
+  ctx.closePath();
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,0.62)";
+  ctx.lineWidth = Math.max(1, size * 0.075);
+  ctx.stroke();
+}
+
+/** Hand styles: pointing, open, closed — white with a dark outline, in the
+    same optical language as the system sprites. */
+function drawHandCursor(ctx, size, assetID) {
+  const white = "#ffffff";
+  const outline = "rgba(0,0,0,0.62)";
+  const line = Math.max(1, size * 0.07);
+  ctx.fillStyle = white;
+  ctx.strokeStyle = outline;
+  ctx.lineWidth = line;
+
+  /* One rounded finger pointing up from `base` to `top`. */
+  const finger = (cx, top, base, width) => {
+    const r = width / 2;
+    ctx.moveTo(cx - r, base);
+    ctx.lineTo(cx - r, top + r);
+    ctx.arc(cx, top + r, r, Math.PI, 0, false);
+    ctx.lineTo(cx + r, base);
+    ctx.closePath();
+  };
+
+  if (assetID === "system.closed-hand") {
+    /* A fist: palm block with knuckle ridges and a thumb across the side. */
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.22, size * 0.1);
+    ctx.lineTo(size * 0.62, size * 0.06);
+    ctx.quadraticCurveTo(size * 0.78, size * 0.08, size * 0.78, size * 0.26);
+    ctx.lineTo(size * 0.7, size * 0.8);
+    ctx.quadraticCurveTo(size * 0.66, size * 0.96, size * 0.42, size * 0.96);
+    ctx.lineTo(-size * 0.02, size * 0.98);
+    ctx.quadraticCurveTo(-size * 0.26, size * 0.96, -size * 0.28, size * 0.7);
+    ctx.quadraticCurveTo(-size * 0.3, size * 0.2, -size * 0.22, size * 0.1);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    /* Knuckle ridges. */
+    ctx.save();
+    ctx.strokeStyle = "rgba(0,0,0,0.28)";
+    ctx.lineWidth = Math.max(0.8, size * 0.05);
+    for (let i = 0; i < 3; i += 1) {
+      const x0 = size * (0.46 + i * 0.14);
+      ctx.beginPath();
+      ctx.moveTo(x0, size * 0.16);
+      ctx.quadraticCurveTo(x0 + size * 0.02, size * 0.4, x0, size * 0.62);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
   }
 
+  /* Open hand (also the vector fallback for pointing-hand). */
+  ctx.beginPath();
+  /* Four spread fingers. */
+  finger(size * 0.05, -size * 0.62, size * 0.6, size * 0.2); // index
+  finger(size * 0.3, -size * 0.5, size * 0.62, size * 0.2); // middle
+  finger(size * 0.53, -size * 0.38, size * 0.64, size * 0.19); // ring
+  finger(size * 0.74, -size * 0.22, size * 0.66, size * 0.18); // little
+  /* Palm. */
+  ctx.moveTo(-size * 0.14, size * 0.28);
+  ctx.quadraticCurveTo(-size * 0.3, size * 0.5, -size * 0.2, size * 0.78);
+  ctx.quadraticCurveTo(-size * 0.1, size * 1.0, size * 0.3, size * 1.0);
+  ctx.quadraticCurveTo(size * 0.78, size * 1.0, size * 0.86, size * 0.64);
+  ctx.lineTo(size * 0.88, size * 0.4);
+  ctx.lineTo(size * 0.6, size * 0.36);
+  ctx.lineTo(size * 0.14, size * 0.4);
+  ctx.quadraticCurveTo(-size * 0.04, size * 0.4, -size * 0.14, size * 0.28);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  /* Thumb. */
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.1, size * 0.42);
+  ctx.quadraticCurveTo(-size * 0.5, size * 0.4, -size * 0.56, size * 0.62);
+  ctx.quadraticCurveTo(-size * 0.58, size * 0.78, -size * 0.4, size * 0.82);
+  ctx.quadraticCurveTo(-size * 0.3, size * 0.84, -size * 0.24, size * 0.7);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  /* Finger separations. */
+  ctx.save();
+  ctx.strokeStyle = "rgba(0,0,0,0.25)";
+  ctx.lineWidth = Math.max(0.8, size * 0.05);
+  ctx.beginPath();
+  ctx.moveTo(size * 0.18, size * 0.4);
+  ctx.lineTo(size * 0.18, size * 0.02);
+  ctx.moveTo(size * 0.42, size * 0.4);
+  ctx.lineTo(size * 0.42, size * 0.1);
+  ctx.moveTo(size * 0.64, size * 0.42);
+  ctx.lineTo(size * 0.64, size * 0.2);
+  ctx.stroke();
   ctx.restore();
-  void speed;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1590,7 +1734,7 @@ export function renderFrame(ctx, document, time, options) {
   drawCamera(ctx, document, cameraLayout, sources);
 
   drawStickers(ctx, document, time, width, height, sources);
-  drawCursor(ctx, document, time, width, height, rect);
+  drawCursor(ctx, document, time, width, height, rect, sources);
 
   if (options.interactive) {
     drawSelectionChrome(ctx, document, rect, cameraLayout);

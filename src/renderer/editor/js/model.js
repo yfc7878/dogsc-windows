@@ -38,11 +38,19 @@ export const DYNAMIC_BACKGROUNDS = ["赛博微流网格", "星辉漫步点阵", 
 export const CAMERA_SHAPES = ["方形", "横向", "纵向", "原始比例", "圆形"];
 
 export const CURSOR_ASSETS = [
-  { value: "system.automatic", label: "系统箭头", icon: "cursor" },
-  { value: "system.pointing-hand", label: "指向手势", icon: "cursor" },
-  { value: "system.crosshair", label: "十字准星", icon: "cursor" },
-  { value: "system.touch-dot", label: "触控圆点", icon: "cursor" },
-  { value: "system.hidden", label: "隐藏", icon: "eyeOff" },
+  /* The full asset set the original's CursorAssetLibrary resolves. "系统"
+     (automatic) follows the recorded cursor as it changed shape; every other
+     entry pins one style. */
+  { value: "system.automatic", label: "系统", note: "跟随录制切换", icon: "cursor" },
+  { value: "system.arrow", label: "系统箭头", icon: "cursor" },
+  { value: "system.pointing-hand", label: "指向手势", icon: "cursorHand" },
+  { value: "system.ibeam", label: "I 型光标", icon: "cursorIbeam" },
+  { value: "system.crosshair", label: "十字准星", icon: "cursorCross" },
+  { value: "system.open-hand", label: "张开手", icon: "cursorOpenHand" },
+  { value: "system.closed-hand", label: "握拳手", icon: "cursorClosedHand" },
+  { value: "system.not-allowed", label: "禁止", icon: "cursorNo" },
+  { value: "system.touch-dot", label: "触控圆点", icon: "cursorDot" },
+  { value: "system.hidden", label: "始终隐藏", icon: "eyeOff" },
 ];
 
 export const CLICK_EFFECTS = [

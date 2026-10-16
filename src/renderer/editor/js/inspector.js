@@ -36,7 +36,12 @@ import {
   easeProgress,
   evaluateClip,
 } from "./model.js";
-import { pointerAt } from "./frame-renderer.js";
+import {
+  pointerAt,
+  drawClickEffect,
+  drawCursorShape,
+  cursorThemeColor,
+} from "./frame-renderer.js";
 import { createEffectClip } from "./timeline.js";
 import { store } from "./store.js";
 
@@ -1899,12 +1904,14 @@ function renderCursorTool(body) {
   const appearance = section(t("光标样式"));
   const grid = document.createElement("div");
   grid.className = "preset-grid wide";
+  grid.id = "cursor-asset-grid";
   for (const asset of CURSOR_ASSETS) {
     const card = document.createElement("button");
     card.type = "button";
     card.className = "preset-card";
     if (style.assetID === asset.value) card.classList.add("is-selected");
     card.innerHTML = `${icon(asset.icon, 18)}<span>${t(asset.label)}</span>`;
+    if (asset.note) attachTooltip(card, t(asset.note));
     card.addEventListener("click", () => {
       store.commit(t("调整光标样式"), (d) => {
         d.cursorStyle.assetID = asset.value;
@@ -1920,6 +1927,8 @@ function renderCursorTool(body) {
     grid.appendChild(card);
   }
   appearance.appendChild(grid);
+  /* 效果预览：点击重播一轮（EditorCursorStylePreview 的移植）。 */
+  appearance.appendChild(cursorPreviewCard(style));
   body.appendChild(appearance);
 
   const geometry = section(t("大小"));
@@ -2084,6 +2093,100 @@ function renderCursorTool(body) {
   syncHint.textContent = t("光标效果、开场与新动画默认值");
   sync.appendChild(syncHint);
   body.appendChild(sync);
+}
+
+/**
+ * The cursor effect preview — the port of `EditorCursorStylePreview`.
+ *
+ * A card that plays one round of the click feedback with the current cursor,
+ * exactly as the compositor would draw it (same `drawClickEffect` /
+ * `drawCursorShape`), replaying whenever the card is clicked. Idle frames
+ * hold the 0.34 phase the original rests at.
+ */
+function cursorPreviewCard(style) {
+  const card = document.createElement("button");
+  card.type = "button";
+  card.className = "cursor-preview";
+  card.id = "cursor-preview";
+
+  if (style.assetID === "system.hidden") {
+    card.disabled = true;
+    card.innerHTML =
+      `<span class="cursor-preview-empty">${icon("eyeOff", 15)}<span>${t("光标已始终隐藏")}</span></span>`;
+    return card;
+  }
+
+  card.innerHTML =
+    `<span class="cursor-preview-label">${t("效果预览")}</span>` +
+    `<span class="cursor-preview-replay">${icon("refresh", 15)}</span>`;
+  const canvas = document.createElement("canvas");
+  canvas.className = "cursor-preview-canvas";
+  card.prepend(canvas);
+
+  const PHASE_PERIOD = 1.15; // seconds per loop, matching the original
+  const PLAY_DURATION = 1600; // ms before the preview settles
+  const REST_PHASE = 0.34;
+  let playing = false;
+  let frameId = 0;
+
+  const paint = (phase) => {
+    const width = card.clientWidth || 240;
+    const height = card.clientHeight || 124;
+    const dpr = window.devicePixelRatio || 1;
+    if (
+      canvas.width !== Math.round(width * dpr) ||
+      canvas.height !== Math.round(height * dpr)
+    ) {
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+
+    const cx = width * 0.46;
+    const cy = height * 0.5;
+    const size = Math.max(10, Math.min(15, height * 0.12));
+    const assetID = style.assetID === "system.automatic" ? "system.arrow" : style.assetID;
+    const color = style.clickColor || cursorThemeColor(assetID);
+
+    if (style.clickEffectStyle !== "none") {
+      drawClickEffect(ctx, style.clickEffectStyle, phase, cx, cy, size, {
+        color,
+        opacity: style.clickOpacity,
+        scale: style.clickScale,
+      });
+    }
+
+    ctx.save();
+    ctx.translate(cx + size * 0.75, cy + size * 1.0);
+    drawCursorShape(ctx, assetID, Math.max(12, Math.min(22, height * 0.2)), store.cursorAssets);
+    ctx.restore();
+  };
+
+  const loop = (startedAt) => {
+    const elapsed = performance.now() - startedAt;
+    if (playing && elapsed < PLAY_DURATION) {
+      const phase = ((elapsed / 1000) % PHASE_PERIOD) / PHASE_PERIOD;
+      paint(phase);
+      frameId = requestAnimationFrame(() => loop(startedAt));
+    } else {
+      playing = false;
+      paint(REST_PHASE);
+    }
+  };
+
+  const play = () => {
+    cancelAnimationFrame(frameId);
+    playing = true;
+    loop(performance.now());
+  };
+  card.addEventListener("click", play);
+  /* One round on entry, like the original's active-editor playback. */
+  requestAnimationFrame(() => {
+    if (card.isConnected) play();
+  });
+  return card;
 }
 
 /* ------------------------------------------------------------------------- */

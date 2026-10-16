@@ -20,6 +20,7 @@ import { CANVAS_RATIOS, normalizeDocument } from "./model.js";
 import { planAutoZoom } from "./auto-zoom.js";
 import { renderFrame, setInteractiveSelection, resolveCanvasSize } from "./frame-renderer.js";
 import { store } from "./store.js";
+import { loadCursorAssets } from "../../shared/cursor-assets.js";
 import {
   buildFilmstrip,
   buildWaveform,
@@ -53,6 +54,9 @@ const ui = {
 
 async function boot() {
   setLocale("zh-Hans");
+  /* System cursor artwork (the NSCursor equivalent); resolves in parallel with
+     the rest of the boot so the first frame already has it. */
+  const cursorAssetsPromise = loadCursorAssets();
   const prefs = await api.prefs.all();
   const theme = await api.app.theme();
   document.documentElement.dataset.theme = theme.dark ? "dark" : "light";
@@ -97,6 +101,16 @@ async function boot() {
   const projectPath = params.get("project");
   if (projectPath) await openProject(projectPath);
   else await openLastOrCreate();
+
+  /* Attach the cursor sprites once they resolve and repaint; the vector
+     fallbacks cover the brief moment before that. */
+  cursorAssetsPromise
+    .then((assets) => {
+      store.cursorAssets = assets;
+      paintInspector();
+      queueRender();
+    })
+    .catch(() => {});
 
   installShortcuts();
   resizePreview();

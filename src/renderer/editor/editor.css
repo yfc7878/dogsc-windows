@@ -1152,3 +1152,70 @@
 .opening-timing-bar.has-grip .opening-timing-grip {
   display: block;
 }
+
+/* ------------------------------------------------------------------------- */
+/* 光标效果预览（EditorCursorStylePreview）                                     */
+/* ------------------------------------------------------------------------- */
+
+.cursor-preview {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 124px;
+  margin-top: 10px;
+  padding: 0;
+  border: 0.75px solid var(--hairline);
+  border-radius: 16px;
+  overflow: hidden;
+  cursor: pointer;
+  background-color: var(--card-elevated);
+  /* 与编辑器工作区一致的浅点阵背景。 */
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--secondary-text) 26%, transparent) 1px,
+    transparent 1.15px
+  );
+  background-size: 16px 16px;
+  background-position: 8px 8px;
+  transition: border-color 0.14s ease;
+}
+.cursor-preview:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--hairline));
+}
+.cursor-preview:disabled {
+  cursor: default;
+}
+.cursor-preview-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.cursor-preview-label {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--secondary-text);
+  pointer-events: none;
+}
+.cursor-preview-replay {
+  position: absolute;
+  top: 9px;
+  right: 11px;
+  display: flex;
+  color: var(--secondary-text);
+  pointer-events: none;
+}
+.cursor-preview-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--secondary-text);
+}
