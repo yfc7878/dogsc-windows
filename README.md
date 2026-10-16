@@ -19,7 +19,19 @@ Windows 移植版 [DogSC](https://github.com/laogou717/dogsc) —— 屏幕录�
 
 **最简单：双击 `启动 DogSC.bat`。**
 
+项目根目录有三个启动脚本（双击即可；后两个只是转发到主脚本，启动逻辑只维护一份）：
+
+| 脚本 | 用途 |
+| --- | --- |
+| `启动 DogSC.bat` | 常规启动 |
+| `启动 DogSC（软件渲染）.bat` | 显卡驱动异常（窗口一闪即退、报错提到 GPU）时改用软件渲染 |
+| `DogSC.bat` | 主脚本；也支持带项目路径直接打开：`DogSC.bat "D:\path\xxx.dogscproject"` |
+
+启动方式自动选择：依赖已装好就从源码启动（永远是最新代码）；没装依赖会先自动 `npm install`；只有打包版、没有源码依赖时启动打包版。
+
 首次双击会自动安装依赖（约 1–2 分钟，需要联网），之后每次双击直接启动。
+
+> 批处理脚本依赖 CRLF 行尾（cmd 读取 UTF-8 批处理时，LF 会让中文被错误解码、报「不是内部或外部命令」）。本仓库已用 `.gitattributes` 强制 `*.bat` 为 CRLF；如果从 Zip 解压或手工改过行尾后出现报错，重新 `git checkout` 一下即可恢复。
 
 ### 或者用命令行
 
@@ -185,6 +197,8 @@ MyCapture.dogscproject/
 | 变量 | 作用 |
 | --- | --- |
 | `DOGSC_SOFTWARE_RENDER=1` | 关闭硬件加速（显卡驱动异常时使用） |
+| `DOGSC_USE_PACKAGED=1` | 启动脚本强制优先拉起打包版（`dist/`） |
+| `DOGSC_NOSTART=1` | 启动脚本只做解析自检、不真正启动应用（开发用） |
 | `DOGSC_LEGACY_RECORD=1` | 强制使用旧的 Chromium 采集路径（诊断用） |
 | `DOGSC_DDAGRAB_LAB=1` | 运行 ffmpeg ddagrab 采集链路的分级诊断并输出完整 stderr |
 | `DOGSC_FAKE_MEDIA=1` | 让 Chromium 暴露一个虚拟摄像头，便于在没有摄像头的机器上验证设备录制 |
