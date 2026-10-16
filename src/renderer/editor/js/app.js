@@ -164,6 +164,33 @@ async function openProject(packagePath) {
 /* Top bar                                                                   */
 /* ------------------------------------------------------------------------- */
 
+/** Refreshes the persistence badge from the store's save pipeline. */
+function updateSaveBadge() {
+  const badge = document.getElementById("save-badge");
+  if (!badge) return;
+  const status = store.saveStatus || "clean";
+  const error = store.saveError || "";
+  if (badge.dataset.state === status && badge.dataset.error === error) return;
+  badge.dataset.state = status;
+  badge.dataset.error = error;
+  const label =
+    status === "saving"
+      ? t("正在保存")
+      : status === "dirty"
+        ? t("编辑中")
+        : status === "failed"
+          ? t("保存失败")
+          : t("已保存");
+  const marker =
+    status === "failed"
+      ? icon("warning", 12)
+      : status === "clean"
+        ? icon("check", 12)
+        : `<span class="save-badge-dot" aria-hidden="true"></span>`;
+  badge.innerHTML = `${marker}<span class="save-badge-label">${label}</span>`;
+  badge.classList.toggle("is-failed", status === "failed");
+}
+
 function buildTopBar() {
   const bar = document.getElementById("top-bar");
 
@@ -187,8 +214,39 @@ function buildTopBar() {
     toast(t("已复制"), { icon: "copy", duration: 1200 });
   });
 
+  /* Persistence badge — reflects the write pipeline, never a timer:
+     已保存 / 编辑中 / 正在保存 / 保存失败. A failed write retries on click
+     (EditorPersistenceIndicator.swift drives its badge the same way). */
+  const saveBadge = document.createElement("button");
+  saveBadge.type = "button";
+  saveBadge.className = "save-badge";
+  saveBadge.id = "save-badge";
+  saveBadge.dataset.state = "clean";
+  attachTooltip(saveBadge, () => {
+    switch (store.saveStatus) {
+      case "saving":
+        return t("正在保存项目…");
+      case "dirty":
+        return t("有未保存的更改，将自动保存");
+      case "failed":
+        return t("保存失败，点击重试") + (store.saveError ? ` · ${store.saveError}` : "");
+      default:
+        return t("项目已自动保存");
+    }
+  });
+  saveBadge.addEventListener("click", () => {
+    if (store.saveStatus !== "failed") return;
+    store
+      .save()
+      .then(() => toast(t("已保存"), { icon: "save" }))
+      .catch(() => {});
+  });
+  updateSaveBadge();
+
   const left = document.getElementById("top-left");
-  left.append(sidebar, titleGroup, copy);
+  left.append(sidebar, titleGroup, saveBadge, copy);
+
+  store.subscribe(() => updateSaveBadge());
 
   const right = document.getElementById("top-right");
   const undo = topButton("undo", t("撤销（⌘Z）"), () => store.undo());
@@ -253,7 +311,7 @@ function showProjectMenu(anchor) {
     anchor,
     [
       { label: t("重命名项目"), onSelect: renameProject },
-      { label: t("保存项目"), note: "Ctrl+S", onSelect: () => store.save().then(() => toast(t("已保存"), { icon: "save" })) },
+      { label: t("保存项目"), note: "Ctrl+S", onSelect: () => store.save().then(() => toast(t("已保存"), { icon: "save" })).catch(() => toast(t("保存失败"), { icon: "warning" })) },
       { separator: true },
       { label: t("打开项目…"), note: "Ctrl+O", onSelect: pickProject },
       { label: t("在文件夹中显示"), onSelect: () => api.project.reveal(store.packagePath) },
@@ -999,7 +1057,7 @@ function installShortcuts() {
     }
     if (mod && event.key.toLowerCase() === "s") {
       event.preventDefault();
-      store.save().then(() => toast(t("已保存"), { icon: "save" }));
+      store.save().then(() => toast(t("已保存"), { icon: "save" })).catch(() => toast(t("保存失败"), { icon: "warning" }));
       return;
     }
     if (mod && event.key.toLowerCase() === "e") {
@@ -1074,7 +1132,7 @@ async function runCommand(command) {
       openExport();
       break;
     case "save":
-      await store.save();
+      await store.save().catch(() => {});
       break;
     default:
       break;

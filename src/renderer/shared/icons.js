@@ -70,6 +70,7 @@ const P = {
   rotate: `<path d="M20 12a8 8 0 1 1-2.6-5.9" stroke-linecap="round"/><path d="M20.4 4.2v4.4h-4.4" stroke-linecap="round" stroke-linejoin="round"/>`,
   mirror: `<path d="M12 3.4v17.2" stroke-dasharray="2.6 2.6"/><path d="M9.4 6.6 4 12l5.4 5.4z"/><path d="M14.6 6.6 20 12l-5.4 5.4z"/>`,
   info: `<circle cx="12" cy="12" r="9.2"/><path d="M12 11v5.4" stroke-linecap="round"/><circle cx="12" cy="7.8" r="1.05" fill="currentColor" stroke="none"/>`,
+  warning: `<path d="M12 3.9 21.3 19.7H2.7z" stroke-linejoin="round"/><path d="M12 10v4.6" stroke-linecap="round"/><circle cx="12" cy="17.2" r="0.55" fill="currentColor" stroke="none"/>`,
   refresh: `<path d="M20.4 12a8.4 8.4 0 1 1-2.5-6" stroke-linecap="round"/><path d="M20.6 3.6v5h-5" stroke-linecap="round" stroke-linejoin="round"/>`,
   save: `<path d="M5.4 3.6h10.2l4 4v12.8H5.4z"/><path d="M8.4 3.6v5.6h6.2V3.6"/><rect x="8.4" y="13" width="7.2" height="7.4" rx="1"/>`,
   open: `<path d="M2.8 6.6a2 2 0 0 1 2-2h3.6l2.2 2.6h8.6a2 2 0 0 1 2 2v9.2a2 2 0 0 1-2 2H4.8a2 2 0 0 1-2-2z"/><path d="M2.8 11.4h18.4"/>`,

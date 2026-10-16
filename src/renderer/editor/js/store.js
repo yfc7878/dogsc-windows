@@ -46,6 +46,14 @@ class EditorStore {
     this.restoreCutMode = false;
     this.previewQuality = "smooth";
     this.saving = false;
+    /** Save-pipeline state the editor's persistence badge reflects. */
+    this.saveStatus = "clean"; // clean | dirty | saving | failed
+    this.saveError = null;
+    /**
+     * Bumped by every document change; a write only settles the revision it
+     * serialised, so edits made mid-save leave the draft dirty afterwards.
+     */
+    this.revision = 0;
 
     /** Copied effect clip, if any (⌘C / ⌘V / ⌘⇧V). */
     this.clipboard = null;
@@ -92,6 +100,9 @@ class EditorStore {
     this.history = [];
     this.future = [];
     this.dirty = false;
+    this.saveStatus = "clean";
+    this.saveError = null;
+    this.revision = 0;
     this.clipboard = null;
     this.selectedPrimaryIds = new Set([this.document.timeline.primaryClips[0]?.id].filter(Boolean));
     this.primaryAnchor = this.document.timeline.primaryClips[0]?.id || null;
@@ -223,7 +234,7 @@ class EditorStore {
     if (this.history.length > MAX_HISTORY) this.history.shift();
     this.future.length = 0;
     mutator(this.document);
-    this.dirty = true;
+    this.markDirty();
     this.notify("commit");
   }
 
@@ -231,8 +242,23 @@ class EditorStore {
   apply(mutator) {
     if (!this.document) return;
     mutator(this.document);
-    this.dirty = true;
+    this.markDirty();
     this.notify("live");
+  }
+
+  /**
+   * Records a document change. `dirty` keeps the autosave honest; the
+   * save status keeps the persistence badge honest: a failed write stays
+   * visible until a retry starts, anything else reads as “editing” until a
+   * save settles it. (EditorPersistenceIndicator drives its badge off the
+   * write pipeline the same way — never off a timer.)
+   */
+  markDirty() {
+    this.dirty = true;
+    this.revision += 1;
+    if (this.saveStatus === "clean" || this.saveStatus === "dirty") {
+      this.saveStatus = "dirty";
+    }
   }
 
   /** Captures the state before a live gesture so it can be undone as one step. */
@@ -246,7 +272,7 @@ class EditorStore {
     if (this.history.length > MAX_HISTORY) this.history.shift();
     this.future.length = 0;
     this._gestureSnapshot = null;
-    this.dirty = true;
+    this.markDirty();
     this.notify("commit");
   }
 
@@ -256,6 +282,7 @@ class EditorStore {
     this.future.push({ actionName: entry.actionName, snapshot: structuredClone(this.document) });
     this.document = entry.snapshot;
     this.clampPlayhead();
+    this.markDirty();
     this.notify("undo");
     return true;
   }
@@ -266,6 +293,7 @@ class EditorStore {
     this.history.push({ actionName: entry.actionName, snapshot: structuredClone(this.document) });
     this.document = entry.snapshot;
     this.clampPlayhead();
+    this.markDirty();
     this.notify("redo");
     return true;
   }
@@ -490,12 +518,28 @@ class EditorStore {
   async save() {
     if (!this.document || !this.packagePath || this.saving) return null;
     this.saving = true;
+    this.saveStatus = "saving";
+    this.saveError = null;
+    this.notify("save-state");
+    /* Only the revision this write serialised may settle it: edits landing
+       while the write is in flight keep the draft dirty afterwards. */
+    const revision = this.revision;
     try {
       const serializable = stripRuntime(this.document);
       await api.project.save({ packagePath: this.packagePath, document: serializable });
-      this.dirty = false;
+      if (this.revision === revision) {
+        this.dirty = false;
+        this.saveStatus = "clean";
+      } else {
+        this.saveStatus = "dirty";
+      }
       this.notify("saved");
       return this.packagePath;
+    } catch (error) {
+      this.saveStatus = "failed";
+      this.saveError = String(error?.message || error || "unknown");
+      this.notify("save-state");
+      throw error;
     } finally {
       this.saving = false;
     }

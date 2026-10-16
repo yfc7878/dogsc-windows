@@ -954,3 +954,201 @@
 [data-theme="dark"] .clip-title {
   color: #f0ece2;
 }
+
+/* --------------------------------------------------------------------------
+   Persistence badge — 已保存 / 编辑中 / 正在保存 / 保存失败
+   -------------------------------------------------------------------------- */
+
+.save-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 11px;
+  border: 0.75px solid var(--chrome-055);
+  border-radius: 999px;
+  background: var(--chrome-045);
+  color: var(--secondary-text);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: default;
+  flex: none;
+  white-space: nowrap;
+}
+.save-badge .icon {
+  color: inherit;
+  flex: none;
+}
+.save-badge[data-state="clean"] .icon {
+  color: var(--success);
+}
+.save-badge[data-state="failed"] {
+  color: var(--amber);
+  border-color: rgba(237, 166, 71, 0.38);
+  background: rgba(237, 166, 71, 0.12);
+  cursor: pointer;
+}
+.save-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--platinum-accent);
+  opacity: 0.55;
+  flex: none;
+}
+.save-badge[data-state="saving"] .save-badge-dot {
+  opacity: 1;
+  animation: save-badge-breathe 0.8s ease-in-out infinite alternate;
+}
+@keyframes save-badge-breathe {
+  from {
+    transform: scale(0.62);
+    opacity: 0.45;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Zoom envelope (缩放曲线) — synth-style curve editor for one zoom clip
+   -------------------------------------------------------------------------- */
+
+:root,
+[data-theme="light"] {
+  --zoom-curve-accent: #a9803e;
+}
+[data-theme="dark"] {
+  --zoom-curve-accent: #d5b078;
+}
+
+.zoom-envelope {
+  position: relative;
+  margin-top: 2px;
+}
+.zoom-envelope canvas {
+  display: block;
+  width: 100%;
+  height: 156px;
+  touch-action: none;
+}
+.zoom-envelope-hud {
+  position: absolute;
+  top: 4px;
+  right: 38px;
+  height: 20px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: var(--chrome-88);
+  color: var(--on-accent);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.zoom-envelope-hud:empty {
+  display: none;
+}
+
+/* --------------------------------------------------------------------------
+   Opening timing — a shared schedule, one bar per element
+   -------------------------------------------------------------------------- */
+
+.opening-timing {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 2px;
+  user-select: none;
+}
+.opening-timing-head {
+  min-height: 14px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--secondary-text);
+}
+.opening-timing-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.opening-timing-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+}
+.opening-timing-label {
+  width: 68px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--secondary-text);
+  white-space: nowrap;
+}
+.opening-timing-row.is-muted .opening-timing-label {
+  opacity: 0.45;
+}
+.opening-timing-track {
+  position: relative;
+  flex: 1;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--control-well);
+  overflow: hidden;
+}
+.opening-timing-row:not(.is-muted) .opening-timing-track {
+  cursor: grab;
+}
+.opening-timing-row:not(.is-muted) .opening-timing-track:active {
+  cursor: grabbing;
+}
+.opening-timing-bar {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  width: 0;
+  min-width: 4px;
+  border-radius: 999px;
+  background: var(--platinum-accent);
+  color: var(--on-accent);
+  display: flex;
+  align-items: center;
+}
+.opening-timing-range {
+  padding-left: 10px;
+  padding-right: 22px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.opening-timing-grip {
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2.5px;
+  height: 10px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.65;
+  display: none;
+  cursor: ew-resize;
+}
+.opening-timing-bar.has-grip .opening-timing-grip {
+  display: block;
+}

@@ -34,6 +34,7 @@ import {
   STICKER_ANIMATIONS_IN,
   STICKER_ANIMATIONS_OUT,
   easeProgress,
+  evaluateClip,
 } from "./model.js";
 import { pointerAt } from "./frame-renderer.js";
 import { createEffectClip } from "./timeline.js";
@@ -55,6 +56,16 @@ const FRAME_TABS = [
 ];
 
 const state = { tool: "frame", frameTab: "background", backgroundTab: "pattern" };
+
+/* Custom canvas/bar gestures in this panel ask the store subscription to hold
+   off rebuilding while they run — exactly like the native-slider guard in
+   widgets.js: the element under the pointer must survive the gesture. */
+let inspectorDragging = false;
+
+/* Live painter for the zoom envelope, so its playhead dot follows playback
+   while tick/playhead notifications skip the full rebuild. Reassigned by
+   paintInspector and cleared whenever the panel is rebuilt. */
+let envelopeSync = null;
 
 /* ------------------------------------------------------------------------- */
 /* Rail                                                                      */
@@ -147,14 +158,17 @@ export function mountInspector(root) {
      this panel for those used to flicker the whole inspector and burn CPU for
      nothing. The timeline and the preview repaint themselves for those. */
   store.subscribe((_store, reason) => {
-    if (isControlDragging()) return;
+    if (isControlDragging() || inspectorDragging) return;
     if (
       reason === "tick" ||
       reason === "playhead" ||
       reason === "play" ||
       reason === "saved" ||
+      reason === "save-state" ||
       reason === "clipboard"
     ) {
+      /* The envelope's playhead dot follows playback without a rebuild. */
+      if ((reason === "tick" || reason === "playhead") && envelopeSync) envelopeSync();
       return;
     }
     paintInspector();
@@ -167,6 +181,7 @@ export function paintInspector() {
   const title = document.getElementById("inspector-title");
   const scope = document.getElementById("inspector-scope");
   if (!body || !store.document) return;
+  envelopeSync = null;
 
   const tool = TOOLS.find((entry) => entry.id === state.tool) || TOOLS[0];
   title.textContent = t(tool.label);
@@ -857,6 +872,7 @@ function renderOpeningTool(body) {
   }
 
   const timing = section(t("过渡与时间"));
+  timing.appendChild(openingTimingEditor(opening));
   group(timing, [
     sliderRow({
       label: t("总时长"),
@@ -956,6 +972,149 @@ function moveOrder(element, delta) {
     [order[index], order[next]] = [order[next], order[index]];
     doc.opening.elementOrder = order;
   });
+}
+
+/* ------------------------------------------------------------------------- */
+/* 开场时序条                                                                  */
+/* ------------------------------------------------------------------------- */
+
+const OPENING_ELEMENT_ICONS = { 屏幕: "screen", 摄像头: "camera", 贴图: "sticker" };
+
+/**
+ * One bar per element on a shared schedule (port of EditorOpeningTimeline):
+ * the first row sets the total duration, later rows set the common stagger,
+ * and any right grip sets the duration. Element `i` starts at `stagger × i`
+ * and animates for `duration` — exactly what openingProgress() renders.
+ *
+ * The domain is frozen for the length of a drag: changing the duration
+ * rescales the schedule, and letting that rescale feed back under the
+ * pointer would make the drag fight itself (EditorOpeningTiming.swift).
+ */
+function openingTimingEditor(opening) {
+  const wrap = document.createElement("div");
+  wrap.className = "opening-timing";
+  const head = document.createElement("div");
+  head.className = "opening-timing-head";
+  wrap.appendChild(head);
+  const list = document.createElement("div");
+  list.className = "opening-timing-rows";
+  wrap.appendChild(list);
+
+  const clampRange = (value, min, max) => Math.min(Math.max(value, min), max);
+  const view = { duration: opening.duration, stagger: opening.stagger };
+  let frozenDomain = null;
+
+  const domainNow = () => {
+    let lastIndex = 0;
+    opening.elementOrder.forEach((element, index) => {
+      if (opening.includedElements.includes(element)) lastIndex = index;
+    });
+    return Math.max(view.duration + view.stagger * lastIndex, 1);
+  };
+  const domain = () => frozenDomain ?? domainNow();
+
+  const updateHead = () => {
+    head.textContent = `${t("总时长")} ${view.duration.toFixed(2)}s · ${t("元素间隔")} ${view.stagger.toFixed(2)}s`;
+  };
+
+  const rows = [];
+  const layout = () => {
+    const scale = domain();
+    for (const row of rows) {
+      if (!row.included) continue;
+      const start = row.index * view.stagger;
+      const left = Math.min(start / scale, 1) * 100;
+      const width = Math.max(Math.min((view.duration / scale) * 100, 100 - left), 0.5);
+      row.bar.style.left = `${left}%`;
+      row.bar.style.width = `${width}%`;
+      const pixels = ((row.track.clientWidth || 200) * width) / 100;
+      row.range.textContent = pixels >= 84 ? `${start.toFixed(2)}–${(start + view.duration).toFixed(2)}s` : "";
+      row.bar.classList.toggle("has-grip", pixels >= 18);
+    }
+  };
+
+  for (const element of opening.elementOrder) {
+    const index = opening.elementOrder.indexOf(element);
+    const included = opening.includedElements.includes(element);
+    const row = document.createElement("div");
+    row.className = "opening-timing-row";
+    if (!included) row.classList.add("is-muted");
+    const label = document.createElement("span");
+    label.className = "opening-timing-label";
+    label.innerHTML = `${icon(OPENING_ELEMENT_ICONS[element] || "spark", 13)}<span>${t(element)}</span>`;
+    const track = document.createElement("div");
+    track.className = "opening-timing-track";
+    const bar = document.createElement("div");
+    bar.className = "opening-timing-bar";
+    const range = document.createElement("span");
+    range.className = "opening-timing-range";
+    const grip = document.createElement("span");
+    grip.className = "opening-timing-grip";
+    bar.append(range, grip);
+    if (included) {
+      track.appendChild(bar);
+      attachTooltip(track, index === 0 ? t("拖动调时长") : t("拖动调间隔 · 右端调时长"));
+    }
+    row.append(label, track);
+    list.appendChild(row);
+    rows.push({ element, index, included, track, bar, range });
+  }
+
+  for (const row of rows) {
+    if (!row.included) continue;
+    row.track.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      const trackRect = row.track.getBoundingClientRect();
+      const barRect = row.bar.getBoundingClientRect();
+      const onGrip = barRect.width >= 18 && event.clientX >= barRect.right - 16;
+      const mode = onGrip || row.index === 0 ? "duration" : "stagger";
+      inspectorDragging = true;
+      frozenDomain = domainNow();
+      store.beginGesture();
+      try {
+        row.track.setPointerCapture(event.pointerId);
+      } catch {
+        /* pointer capture is best-effort */
+      }
+      const secondsPerPoint = frozenDomain / Math.max(trackRect.width, 1);
+      let previousX = event.clientX;
+
+      const onMove = (moveEvent) => {
+        const delta = (moveEvent.clientX - previousX) * secondsPerPoint;
+        previousX = moveEvent.clientX;
+        if (mode === "duration") {
+          view.duration = clampRange(view.duration + delta, 0.4, 8);
+        } else {
+          /* Element `index` starts at stagger × index, so it follows the
+             pointer when the stagger moves by pointerDelta ÷ index. */
+          view.stagger = clampRange(view.stagger + delta / Math.max(row.index, 1), 0, 1.2);
+        }
+        store.apply((doc) => {
+          doc.opening.duration = view.duration;
+          doc.opening.stagger = view.stagger;
+        });
+        updateHead();
+        layout();
+      };
+      const onEnd = () => {
+        row.track.removeEventListener("pointermove", onMove);
+        row.track.removeEventListener("pointerup", onEnd);
+        row.track.removeEventListener("pointercancel", onEnd);
+        inspectorDragging = false;
+        frozenDomain = null;
+        store.commitGesture(mode === "duration" ? t("调整开场总时长") : t("调整开场元素间隔"));
+      };
+      row.track.addEventListener("pointermove", onMove);
+      row.track.addEventListener("pointerup", onEnd);
+      row.track.addEventListener("pointercancel", onEnd);
+    });
+  }
+
+  updateHead();
+  layout();
+  requestAnimationFrame(layout);
+  return wrap;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1084,6 +1243,337 @@ function renderMotionTool(body) {
   body.appendChild(smoothing);
 }
 
+/* ------------------------------------------------------------------------- */
+/* 缩放包络曲线                                                                */
+/* ------------------------------------------------------------------------- */
+
+const ENVELOPE_MAX_SCALE = 6;
+const ENVELOPE_MIN_PEAK = 1.05;
+const ENVELOPE_PLOT = { top: 14, right: 34, bottom: 24, left: 10 };
+
+/**
+ * The shape of one zoom, drawn the way a synthesiser draws an envelope
+ * (port of EditorZoomEnvelope.swift): time runs right, magnification rises
+ * on a log scale, and three draggable nodes set the push-in length and peak,
+ * the peak alone, and the pull-out length. The curve samples the very same
+ * evaluation the frame renderer uses, so the drawing cannot drift from what
+ * the export actually renders.
+ */
+function zoomEnvelope(clip) {
+  const wrap = document.createElement("div");
+  wrap.className = "zoom-envelope";
+  const canvas = document.createElement("canvas");
+  wrap.appendChild(canvas);
+  const hud = document.createElement("span");
+  hud.className = "zoom-envelope-hud";
+  wrap.appendChild(hud);
+
+  /* Values being edited — updated live while a node is held. */
+  const view = {
+    startTime: clip.startTime,
+    duration: Math.max(clip.duration, 0.001),
+    transitionIn: clip.transitionIn,
+    transitionOut: clip.transitionOut,
+    scale: clip.scale,
+    easing: clip.easing,
+  };
+
+  let dragging = null; // "enter" | "peak" | "exit"
+  let hovered = null;
+
+  /* The renderer's own evaluation decides the curve — including the easing
+     overshoot clamp — so the panel can never disagree with the canvas. */
+  const progressAt = (local) => {
+    const evaluated = evaluateClip(
+      {
+        startTime: 0,
+        duration: view.duration,
+        transitionIn: view.transitionIn,
+        transitionOut: view.transitionOut,
+        easing: view.easing,
+      },
+      Math.min(Math.max(local, 0), view.duration)
+    );
+    return evaluated ? evaluated.progress : 0;
+  };
+  const scaleAt = (time) => 1 + (view.scale - 1) * progressAt(time);
+
+  const plotRect = () => {
+    const width = canvas.clientWidth || 258;
+    const height = canvas.clientHeight || 156;
+    return {
+      x: ENVELOPE_PLOT.left,
+      y: ENVELOPE_PLOT.top,
+      width: Math.max(width - ENVELOPE_PLOT.left - ENVELOPE_PLOT.right, 1),
+      height: Math.max(height - ENVELOPE_PLOT.top - ENVELOPE_PLOT.bottom, 1),
+    };
+  };
+  const timeToX = (time, plot) => plot.x + Math.min(Math.max(time / view.duration, 0), 1) * plot.width;
+  const xToTime = (x, plot) => ((x - plot.x) / plot.width) * view.duration;
+  const scaleToY = (scale, plot) => {
+    const clamped = Math.min(Math.max(scale, 0.9), ENVELOPE_MAX_SCALE + 0.4);
+    return plot.y + plot.height - (Math.log(clamped) / Math.log(ENVELOPE_MAX_SCALE)) * plot.height;
+  };
+  const yToScale = (y, plot) =>
+    Math.exp(((plot.y + plot.height - y) / plot.height) * Math.log(ENVELOPE_MAX_SCALE));
+
+  /* The exit node only exists once there is a pull-out to drag; the enter
+     node is always present (drags right to create a push-in). */
+  const nodePoints = (plot) => {
+    const points = {
+      enter: { x: timeToX(view.transitionIn, plot), y: scaleToY(view.scale, plot) },
+      peak: { x: timeToX(Math.max(view.duration - view.transitionOut, 0), plot), y: scaleToY(view.scale, plot) },
+    };
+    if (view.transitionOut > 0.001) {
+      points.exit = { x: timeToX(view.duration, plot), y: scaleToY(1, plot) };
+    }
+    return points;
+  };
+  const nearestNode = (x, y, plot, radius = 16) => {
+    let best = null;
+    let bestDistance = Infinity;
+    for (const [id, point] of Object.entries(nodePoints(plot))) {
+      const distance = Math.hypot(point.x - x, point.y - y);
+      if (distance <= radius && distance < bestDistance) {
+        best = id;
+        bestDistance = distance;
+      }
+    }
+    return best;
+  };
+
+  const cssValue = (name, fallback) => {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return value || fallback;
+  };
+  const uiFont = "10px 'Alibaba PuHuiTi 3', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif";
+
+  const draw = () => {
+    const width = canvas.clientWidth || 258;
+    const height = canvas.clientHeight || 156;
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+
+    const plot = plotRect();
+    const accent = cssValue("--zoom-curve-accent", "#a9803e");
+    const faint = cssValue("--secondary-text", "#616161");
+    const grid = cssValue("--chrome-055", "rgba(0, 0, 0, 0.06)");
+    const gridStrong = cssValue("--chrome-16", "rgba(0, 0, 0, 0.16)");
+    const paper = cssValue("--card-elevated", "#ffffff");
+
+    /* Magnification gridlines on the log scale, 1× solid. */
+    ctx.lineWidth = 0.75;
+    ctx.font = uiFont;
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    for (const level of [1, 2, 3, 4, 6]) {
+      const y = scaleToY(level, plot);
+      ctx.strokeStyle = level === 1 ? gridStrong : grid;
+      ctx.setLineDash(level === 1 ? [] : [2, 4]);
+      ctx.beginPath();
+      ctx.moveTo(plot.x, y);
+      ctx.lineTo(plot.x + plot.width, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = faint;
+      ctx.fillText(`${level}×`, plot.x + plot.width + 6, y);
+    }
+
+    /* Phase captions under the axis (进入 / 保持 / 退出). */
+    ctx.textAlign = "center";
+    const phases = [
+      [t("进入"), 0, view.transitionIn],
+      [t("保持"), view.transitionIn, view.duration - view.transitionOut],
+      [t("退出"), view.duration - view.transitionOut, view.duration],
+    ];
+    for (const [label, from, to] of phases) {
+      const left = timeToX(from, plot);
+      const right = timeToX(to, plot);
+      if (right - left > 30) ctx.fillText(label, (left + right) / 2, plot.y + plot.height + 15);
+    }
+
+    /* The evaluated curve with a flat wash underneath. */
+    const steps = Math.max(Math.floor(plot.width / 3), 24);
+    const points = [];
+    for (let step = 0; step <= steps; step += 1) {
+      const time = (step / steps) * view.duration;
+      points.push([timeToX(time, plot), scaleToY(scaleAt(time), plot)]);
+    }
+    if (points.length > 1) {
+      ctx.beginPath();
+      ctx.moveTo(points[0][0], points[0][1]);
+      for (const [x, y] of points.slice(1)) ctx.lineTo(x, y);
+      ctx.save();
+      ctx.lineTo(points[points.length - 1][0], plot.y + plot.height);
+      ctx.lineTo(points[0][0], plot.y + plot.height);
+      ctx.closePath();
+      ctx.globalAlpha = 0.12;
+      ctx.fillStyle = accent;
+      ctx.fill();
+      ctx.restore();
+      ctx.beginPath();
+      ctx.moveTo(points[0][0], points[0][1]);
+      for (const [x, y] of points.slice(1)) ctx.lineTo(x, y);
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 2.6;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.stroke();
+    }
+
+    /* Playhead: a dashed line and a dot riding the curve. */
+    const relative = store.playhead - view.startTime;
+    if (relative >= 0 && relative <= view.duration) {
+      const px = timeToX(relative, plot);
+      const py = scaleToY(scaleAt(relative), plot);
+      ctx.strokeStyle = accent;
+      ctx.globalAlpha = 0.55;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(px, plot.y - 6);
+      ctx.lineTo(px, plot.y + plot.height);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      ctx.beginPath();
+      ctx.arc(px, py, 5, 0, Math.PI * 2);
+      ctx.fillStyle = paper;
+      ctx.fill();
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+    }
+
+    /* Nodes. */
+    for (const [id, point] of Object.entries(nodePoints(plot))) {
+      const lit = dragging === id || (!dragging && hovered === id);
+      if (lit) {
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 15, 0, Math.PI * 2);
+        ctx.globalAlpha = 0.22;
+        ctx.fillStyle = accent;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      const radius = lit ? 8 : 6.5;
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = paper;
+      ctx.fill();
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
+  };
+
+  const updateHud = (node) => {
+    if (node === "enter") {
+      hud.textContent = `${t("进入")} ${view.transitionIn.toFixed(2)}s · ${t("峰值")} ${view.scale.toFixed(2)}×`;
+    } else if (node === "peak") {
+      hud.textContent = `${t("峰值")} ${view.scale.toFixed(2)}×`;
+    } else {
+      hud.textContent = `${t("退出")} ${view.transitionOut.toFixed(2)}s`;
+    }
+  };
+
+  const localPoint = (event) => {
+    const rect = canvas.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  };
+
+  canvas.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || dragging) return;
+    const plot = plotRect();
+    const point = localPoint(event);
+    const node = nearestNode(point.x, point.y, plot);
+    if (!node) return;
+    event.preventDefault();
+    dragging = node;
+    hovered = node;
+    inspectorDragging = true;
+    try {
+      canvas.setPointerCapture(event.pointerId);
+    } catch {
+      /* pointer capture is best-effort */
+    }
+    store.beginGesture();
+    updateHud(node);
+    draw();
+  });
+
+  canvas.addEventListener("pointermove", (event) => {
+    const plot = plotRect();
+    const point = localPoint(event);
+    if (!dragging) {
+      const node = nearestNode(point.x, point.y, plot);
+      if (node !== hovered) {
+        hovered = node;
+        canvas.style.cursor = node ? "grab" : "default";
+        draw();
+      }
+      return;
+    }
+    canvas.style.cursor = "grabbing";
+    const time = Math.min(Math.max(xToTime(point.x, plot), 0), view.duration);
+    const peak = Math.min(Math.max(yToScale(point.y, plot), ENVELOPE_MIN_PEAK), ENVELOPE_MAX_SCALE);
+    if (dragging === "enter") {
+      view.transitionIn = Math.min(Math.max(time, 0), Math.min(3, view.duration));
+      view.scale = peak;
+    } else if (dragging === "peak") {
+      view.scale = peak;
+    } else {
+      view.transitionOut = Math.min(Math.max(view.duration - time, 0), Math.min(3, view.duration));
+    }
+    store.apply((doc) => {
+      const target = doc.timeline.zoomClips.find((entry) => entry.id === clip.id);
+      if (!target) return;
+      target.transitionIn = view.transitionIn;
+      target.transitionOut = view.transitionOut;
+      target.scale = view.scale;
+    });
+    updateHud(dragging);
+    draw();
+  });
+
+  const endDrag = (event) => {
+    if (!dragging) return;
+    dragging = null;
+    inspectorDragging = false;
+    try {
+      canvas.releasePointerCapture(event.pointerId);
+    } catch {
+      /* already released */
+    }
+    canvas.style.cursor = "default";
+    hovered = null;
+    hud.textContent = "";
+    store.commitGesture(t("调整缩放曲线"));
+  };
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+  canvas.addEventListener("pointerleave", () => {
+    if (dragging || !hovered) return;
+    hovered = null;
+    canvas.style.cursor = "";
+    draw();
+  });
+
+  /* Keep the playhead dot riding the curve without rebuilding the panel. */
+  envelopeSync = () => {
+    if (canvas.isConnected) draw();
+  };
+
+  requestAnimationFrame(draw);
+  return wrap;
+}
+
 function renderZoom(body, clip) {
   const s = section(t("缩放"));
   const modeRow = choiceGroup(
@@ -1141,6 +1631,14 @@ function renderZoom(body, clip) {
       }),
     () => store.commitGesture(t("调整缩放焦点"))
   );
+
+  /* The envelope edits the same three values the sliders below drive,
+     sampling the renderer's own evaluation for its curve. */
+  s.appendChild(zoomEnvelope(clip));
+  const curveHint = document.createElement("p");
+  curveHint.className = "section-hint";
+  curveHint.textContent = t("拖动节点调整进入、峰值与退出");
+  s.appendChild(curveHint);
 
   group(s, [
     sliderRow({

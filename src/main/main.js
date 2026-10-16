@@ -969,6 +969,9 @@ async function runSmokeTest(outputDir, projectPath) {
     if (process.env.DOGSC_AUTOZOOM_PROBE) {
       await runAutoZoomProbe(editor);
     }
+    if (process.env.DOGSC_UI_PROBE) {
+      await runInspectorProbe(editor);
+    }
     if (process.env.DOGSC_TOPBAR_EXPORT_PROBE) {
       await runTopbarExportProbe(editor, outputDir);
     }
@@ -2461,6 +2464,126 @@ async function dumpDiagnostics(win, name) {
  * size and again shrunk near the minimum — the state where the tool rail used
  * to sprout a horizontal scrollbar, leaving a stray white block below it.
  */
+/**
+ * UI probe (`DOGSC_UI_PROBE=1`): drives the inspector so the smoke run can
+ * photograph the three ported UI pieces — the opening timing bars, the zoom
+ * envelope and the persistence badge — and asserts the states the save
+ * pipeline drives (clean on load, editing right after a commit; smoke runs
+ * neutralise the actual save, so the settled states belong to the unit test).
+ */
+async function runInspectorProbe(win) {
+  if (!win || win.isDestroyed()) return;
+
+  /* Read the badge before anything commits: a fresh load reads clean. */
+  const initialBadge = await win.webContents
+    .executeJavaScript(`document.getElementById("save-badge")?.dataset.state ?? "missing"`)
+    .catch(() => "missing");
+
+  await win.webContents
+    .executeJavaScript(
+      `(() => {
+         const store = window.__dogscStore;
+         if (store && store.document) {
+           store.commit("probe", (doc) => { doc.opening.isEnabled = true; });
+         }
+         document.querySelector('.rail-button[data-tool="opening"]')?.click();
+         return true;
+       })()`
+    )
+    .catch((error) => console.error("[ui-probe] opening setup failed:", error.message));
+  await shoot("ui-opening", win, 700);
+
+  const selected = await win.webContents
+    .executeJavaScript(
+      `(() => {
+         const store = window.__dogscStore;
+         const clip = store.document.timeline.zoomClips[0];
+         if (!clip) return { error: "no zoom clip" };
+         store.select("zoom", clip.id);
+         return { id: clip.id, duration: clip.duration, scale: clip.scale, transitionOut: clip.transitionOut };
+       })()`
+    )
+    .catch((error) => ({ error: String(error) }));
+  console.log("[ui-probe] zoom clip:", JSON.stringify(selected));
+
+  await win.webContents
+    .executeJavaScript(`document.querySelector('.rail-button[data-tool="zoom"]')?.click(), true`)
+    .catch((error) => console.error("[ui-probe] rail click failed:", error.message));
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  await win.webContents
+    .executeJavaScript(`document.querySelector(".zoom-envelope")?.scrollIntoView({ block: "center" }), true`)
+    .catch(() => {});
+  await shoot("ui-envelope", win, 700);
+
+  const envelope = await win.webContents
+    .executeJavaScript(
+      `(() => {
+         const canvas = document.querySelector(".zoom-envelope canvas");
+         return { found: Boolean(canvas), backingWidth: canvas ? canvas.width : 0 };
+       })()`
+    )
+    .catch((error) => ({ error: String(error) }));
+  console.log("[ui-probe] envelope:", JSON.stringify(envelope));
+
+  /* Drag the peak node down and confirm the store value actually moved —
+     an end-to-end check of the envelope's pointer pipeline and its math. */
+  let drag = { error: "no zoom clip" };
+  if (selected.id) {
+    drag = await win.webContents
+      .executeJavaScript(
+        `(() => {
+           const store = window.__dogscStore;
+           const id = ${JSON.stringify(selected.id)};
+           const clip = store.document.timeline.zoomClips.find((entry) => entry.id === id);
+           const canvas = document.querySelector(".zoom-envelope canvas");
+           if (!clip || !canvas) return { error: "missing clip or canvas" };
+           const before = clip.scale;
+           const width = canvas.clientWidth;
+           const height = canvas.clientHeight;
+           const plot = { x: 10, y: 14, width: width - 44, height: height - 38 };
+           const scaleToY = (s) => plot.y + plot.height - (Math.log(s) / Math.log(6)) * plot.height;
+           const timeToX = (t) => plot.x + (t / clip.duration) * plot.width;
+           const from = { x: timeToX(clip.duration - clip.transitionOut), y: scaleToY(clip.scale) };
+           const to = { x: from.x, y: scaleToY(1.45) };
+           const rect = canvas.getBoundingClientRect();
+           const fire = (type, point) =>
+             canvas.dispatchEvent(new PointerEvent(type, {
+               bubbles: true, cancelable: true, button: 0, pointerId: 1,
+               clientX: rect.left + point.x, clientY: rect.top + point.y,
+             }));
+           fire("pointerdown", from);
+           fire("pointermove", to);
+           fire("pointerup", to);
+           const target = store.document.timeline.zoomClips.find((entry) => entry.id === id);
+           return { before: Number(before.toFixed(3)), after: Number(target.scale.toFixed(3)) };
+         })()`
+      )
+      .catch((error) => ({ error: String(error) }));
+  }
+  console.log("[ui-probe] drag:", JSON.stringify(drag));
+
+  const badge = await win.webContents
+    .executeJavaScript(
+      `(() => {
+         const store = window.__dogscStore;
+         const read = () => document.getElementById("save-badge")?.dataset.state ?? "missing";
+         store.commit("probe", () => {});
+         return read();
+       })()`
+    )
+    .catch((error) => ({ error: String(error) }));
+  console.log("[ui-probe] badge:", JSON.stringify({ initial: initialBadge, afterCommit: badge }));
+
+  const pass =
+    envelope.found &&
+    envelope.backingWidth > 0 &&
+    !drag.error &&
+    Math.abs(drag.after - 1.45) < 0.15 &&
+    initialBadge === "clean" &&
+    badge === "dirty";
+  console.log(`[ui-probe] ${pass ? "PASS" : "FAIL"}`);
+}
+
 async function runLayoutProbe(win) {
   if (!win || win.isDestroyed()) return;
   const measure = () =>
