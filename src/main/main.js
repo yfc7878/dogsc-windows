@@ -1299,12 +1299,21 @@ async function runMediaExchangeProbe(outputDir) {
 
     /* UI surface: the Project menu lists both actions enabled; 粘贴图片
        follows the clipboard (disabled while empty, enabled and functional
-       once an image is present). The probe's clipboard writes are restored. */
+       once an image is present). Both menus are left open for a screenshot.
+       The probe's clipboard writes are restored. */
     const previousClipboardImage = clipboard.readImage();
     const hadPreviousClipboard = Boolean(
       previousClipboardImage && !previousClipboardImage.isEmpty()
     );
     clipboard.clear();
+    await editor.webContents.executeJavaScript(
+      `(async () => {
+         document.getElementById("project-title").click();
+         await new Promise((r) => setTimeout(r, 120));
+         return true;
+       })()`
+    );
+    await shoot("06-editor-project-menu", editor, 500);
     const menuCheck = await editor.webContents.executeJavaScript(
       `(async () => {
          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1315,22 +1324,22 @@ async function runMediaExchangeProbe(outputDir) {
          const closeMenu = () => document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
          const out = {};
 
-         document.getElementById("project-title").click();
-         await sleep(90);
          const projectMenu = items();
          out.projectSource = projectMenu.find((i) => i.text.startsWith("导出项目源文件")) || null;
          out.projectCamera = projectMenu.find((i) => i.text.startsWith("替换当前项目摄像头")) || null;
          closeMenu();
-         await sleep(90);
+         await sleep(120);
 
          document.getElementById("canvas-add").click();
-         await sleep(150);
+         await sleep(160);
          const addMenu = items();
          out.pasteEmpty = addMenu.find((i) => i.text.startsWith("粘贴图片")) || null;
-         closeMenu();
-         await sleep(90);
          return out;
        })()`
+    );
+    await shoot("07-editor-add-menu", editor, 500);
+    await editor.webContents.executeJavaScript(
+      `document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }))`
     );
     record(
       "项目菜单：导出项目源文件…（启用）",
