@@ -31,8 +31,8 @@ Windows 移植版 [DogSC](https://github.com/laogou717/dogsc) —— 屏幕录�
 
 | 文件 | 说明 |
 | --- | --- |
-| `DogSC-0.1.2-win-x64-setup.exe` | 安装版：可选择安装目录，带开始菜单快捷方式 |
-| `DogSC-0.1.2-win-x64-portable.exe` | 免安装便携版：双击即用 |
+| `DogSC-0.2.0-win-x64-setup.exe` | 安装版：可选择安装目录，带开始菜单快捷方式 |
+| `DogSC-0.2.0-win-x64-portable.exe` | 免安装便携版：双击即用 |
 
 Windows 10 / 11（64 位）。未做代码签名，首次运行若遇 SmartScreen 提示，请选择「更多信息 → 仍要运行」。
 
