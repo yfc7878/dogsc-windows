@@ -1,5 +1,15 @@
 # DogSC for Windows
 
+<p align="center">
+  <a href="https://github.com/yfc7878/dogsc-windows/stargazers"><img alt="GitHub Stars" src="https://img.shields.io/github/stars/yfc7878/dogsc-windows?style=social"></a>
+  &nbsp;
+  <a href="https://github.com/yfc7878/dogsc-windows/forks"><img alt="GitHub Forks" src="https://img.shields.io/github/forks/yfc7878/dogsc-windows?style=social"></a>
+  &nbsp;
+  <a href="https://github.com/yfc7878/dogsc-windows/releases/latest"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/yfc7878/dogsc-windows?style=social&label=Release"></a>
+  &nbsp;
+  <a href="https://github.com/yfc7878/dogsc-windows/releases"><img alt="GitHub Downloads" src="https://img.shields.io/github/downloads/yfc7878/dogsc-windows/total?style=social&label=下载"></a>
+</p>
+
 Windows 移植版 [DogSC](https://github.com/laogou717/dogsc) —— 屏幕录制与轻量剪辑工具。
 
 录制、剪辑、运镜，到导出成片。功能、界面布局、交互方式与使用体验对齐 macOS 原版。
