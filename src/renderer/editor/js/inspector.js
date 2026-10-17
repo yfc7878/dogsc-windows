@@ -11,6 +11,7 @@ import { t } from "../../shared/i18n.js";
 import {
   attachTooltip,
   choiceGroup,
+  clamp,
   isControlDragging,
   segmented,
   showMenu,
@@ -35,6 +36,7 @@ import {
   STICKER_ANIMATIONS_OUT,
   easeProgress,
   evaluateClip,
+  rid,
 } from "./model.js";
 import {
   pointerAt,
@@ -42,7 +44,7 @@ import {
   drawCursorShape,
   cursorThemeColor,
 } from "./frame-renderer.js";
-import { createEffectClip } from "./timeline.js";
+import { createEffectClip, startPlayback, togglePlay } from "./timeline.js";
 import { store } from "./store.js";
 
 const TOOLS = [
@@ -415,9 +417,6 @@ function renderBackground(body) {
     pick.addEventListener("click", () => chooseCustomImage());
     row.appendChild(pick);
     s.appendChild(row);
-    s.appendChild(
-      document.createTextNode("")
-    );
     const hint = document.createElement("p");
     hint.className = "section-hint";
     hint.textContent = t("壁纸") + " · PNG / JPG / MP4";
@@ -785,6 +784,16 @@ function renderMockup(body) {
 
   if (canvas.screenFrame === "none") return;
 
+  /* Device frames are bezels, not toolbars — 顶栏高度 means nothing there. */
+  const isDeviceFrame = [
+    "devicePhone",
+    "adaptiveDevice",
+    "phonePortrait",
+    "phoneLandscape",
+    "tabletPortrait",
+    "tabletLandscape",
+  ].includes(canvas.screenFrame);
+
   const s = section(t("样机"));
   group(s, [
     sliderRow({
@@ -798,17 +807,21 @@ function renderMockup(body) {
       onChange: (v) => store.apply((doc) => (doc.canvas.screenFrameScale = v)),
       onCommit: (v) => store.commit(t("调整屏幕样机大小"), (doc) => (doc.canvas.screenFrameScale = v)),
     }),
-    sliderRow({
-      label: t("顶栏高度"),
-      value: canvas.screenFrameToolbarScale,
-      min: 0.65,
-      max: 1.6,
-      step: 0.01,
-      format: (v) => v.toFixed(2),
-      suffix: "×",
-      onChange: (v) => store.apply((doc) => (doc.canvas.screenFrameToolbarScale = v)),
-      onCommit: (v) => store.commit(t("调整样机顶栏高度"), (doc) => (doc.canvas.screenFrameToolbarScale = v)),
-    }),
+    ...(isDeviceFrame
+      ? []
+      : [
+          sliderRow({
+            label: t("顶栏高度"),
+            value: canvas.screenFrameToolbarScale,
+            min: 0.65,
+            max: 1.6,
+            step: 0.01,
+            format: (v) => v.toFixed(2),
+            suffix: "×",
+            onChange: (v) => store.apply((doc) => (doc.canvas.screenFrameToolbarScale = v)),
+            onCommit: (v) => store.commit(t("调整样机顶栏高度"), (doc) => (doc.canvas.screenFrameToolbarScale = v)),
+          }),
+        ]),
     sliderRow({
       label: t("框体外圆角"),
       value: canvas.screenFrameOuterCornerRadius ?? canvas.cornerRadius + 10,
@@ -1199,8 +1212,10 @@ function renderMotionTool(body) {
     }),
     choiceGroup(
       [
-        { value: "spring", label: t("顺滑") },
-        { value: "easeInOut", label: t("均衡") },
+        { value: "spring", label: t("弹簧") },
+        { value: "cubic", label: t("三次方缓动") },
+        { value: "quad", label: t("二次方缓动") },
+        { value: "quint", label: t("五次平滑") },
         { value: "linear", label: t("线性") },
       ],
       doc.motion.defaultZoomEasing,
@@ -1645,6 +1660,26 @@ function renderZoom(body, clip) {
   curveHint.textContent = t("拖动节点调整进入、峰值与退出");
   s.appendChild(curveHint);
 
+  /* Per-clip easing — the original's ZoomEasingPreset picker. The global
+     default in 新动画过渡 seeds new clips; this overrides it per clip. */
+  s.appendChild(
+    choiceGroup(
+      [
+        { value: "spring", label: t("弹簧") },
+        { value: "cubic", label: t("三次方缓动") },
+        { value: "quad", label: t("二次方缓动") },
+        { value: "quint", label: t("五次平滑") },
+        { value: "linear", label: t("线性") },
+      ],
+      clip.easing || "spring",
+      (value) =>
+        store.commit(t("调整缩放缓动"), (doc) => {
+          const target = doc.timeline.zoomClips.find((entry) => entry.id === clip.id);
+          if (target) target.easing = value;
+        })
+    )
+  );
+
   group(s, [
     sliderRow({
       label: t("放大比例"),
@@ -2062,9 +2097,9 @@ function renderCursorTool(body) {
   reset.type = "button";
   reset.className = "btn";
   reset.style.height = "28px";
-  reset.textContent = t("归零摄像头音画同步");
+  reset.textContent = t("归零光标音画同步");
   reset.addEventListener("click", () => {
-    store.commit(t("归零摄像头音画同步"), (d) => {
+    store.commit(t("归零光标音画同步"), (d) => {
       d.cursorStyle.syncOffset = 0;
     });
     paintInspector();
@@ -2074,7 +2109,7 @@ function renderCursorTool(body) {
 
   group(sync, [
     sliderRow({
-      label: t("基准 %@", "0ms"),
+      label: t("偏移 %@", "0ms"),
       value: offset,
       min: -1,
       max: 1,
@@ -2083,9 +2118,9 @@ function renderCursorTool(body) {
       suffix: "ms",
       parse: (text) => Number(text),
       scale: 0.001,
-      tooltip: t("录制鼠标位置 · 调整焦点切换为手动定位"),
+      tooltip: t("微调光标轨相对画面的时间偏移"),
       onChange: (v) => store.apply((d) => (d.cursorStyle.syncOffset = v)),
-      onCommit: (v) => store.commit(t("校准摄像头音画同步"), (d) => (d.cursorStyle.syncOffset = v)),
+      onCommit: (v) => store.commit(t("校准光标音画同步"), (d) => (d.cursorStyle.syncOffset = v)),
     }),
   ]);
   const syncHint = document.createElement("p");
@@ -2365,7 +2400,155 @@ function renderCameraTool(body) {
   framing.appendChild(resetFraming);
   body.appendChild(framing);
 
+  /* ---- 音画同步：全片偏移（原版摄像头同步）---- */
+  const sync = section(t("音画同步"), t("同步正常"));
+  const syncOffset = camera.syncOffset || 0;
+  const syncRow = document.createElement("div");
+  syncRow.className = "row";
+  const syncStatus = document.createElement("span");
+  syncStatus.className = "field-value";
+  syncStatus.style.flex = "1";
+  syncStatus.textContent =
+    Math.abs(syncOffset) < 0.001
+      ? t("同步正常")
+      : syncOffset > 0
+        ? t("画面延后 %@", `${Math.round(syncOffset * 1000)}ms`)
+        : t("画面提前 %@", `${Math.round(-syncOffset * 1000)}ms`);
+  const syncReset = document.createElement("button");
+  syncReset.type = "button";
+  syncReset.className = "btn";
+  syncReset.style.height = "28px";
+  syncReset.textContent = t("归零摄像头音画同步");
+  syncReset.addEventListener("click", () => {
+    store.commit(t("归零摄像头音画同步"), (d) => {
+      d.camera.syncOffset = 0;
+    });
+    paintInspector();
+  });
+  syncRow.append(syncStatus, syncReset);
+  sync.appendChild(syncRow);
+  group(sync, [
+    sliderRow({
+      label: t("偏移 %@", "0ms"),
+      value: syncOffset,
+      min: -1,
+      max: 1,
+      step: 1 / 30,
+      format: (v) => `${v >= 0 ? "+" : ""}${Math.round(v * 1000)}`,
+      suffix: "ms",
+      parse: (text) => Number(text),
+      scale: 0.001,
+      tooltip: t("微调摄像头画面相对屏幕的时间偏移"),
+      onChange: (v) => store.apply((d) => (d.camera.syncOffset = v)),
+      onCommit: (v) => store.commit(t("校准摄像头音画同步"), (d) => (d.camera.syncOffset = v)),
+    }),
+  ]);
+  const audition = document.createElement("button");
+  audition.type = "button";
+  audition.className = "btn";
+  audition.style.width = "100%";
+  audition.innerHTML = `${icon("play", 15)}<span>${t("试听")}</span>`;
+  audition.addEventListener("click", () => {
+    /* Play a short window around the playhead — the original's 自动试听. */
+    if (store.playing) {
+      togglePlay();
+      return;
+    }
+    store.setPlayhead(Math.max(0, store.playhead - 1));
+    startPlayback(store.playhead + 2);
+  });
+  sync.appendChild(audition);
+  body.appendChild(sync);
+
+  /* ---- 摄像头动画：原版的播放头布局预设与出现动画 ---- */
+  const animation = section(t("摄像头动画"), t("在播放头添加；时长与缓动可随后在时间线上调整"));
+  const addEntrance = document.createElement("button");
+  addEntrance.type = "button";
+  addEntrance.className = "btn";
+  addEntrance.style.width = "100%";
+  addEntrance.innerHTML = `${icon("plus", 15)}<span>${t("在播放头添加出现动画")}</span>`;
+  addEntrance.addEventListener("click", () =>
+    addCameraMotionClip({
+      position: { ...camera.position },
+      scale: 1,
+      opacity: 1,
+    }, { entrance: true })
+  );
+  animation.appendChild(addEntrance);
+
+  const presetRow = document.createElement("div");
+  presetRow.className = "row";
+  presetRow.style.marginTop = "8px";
+  const layoutPresets = [
+    {
+      label: t("全屏"),
+      target: {
+        position: { x: 0.5, y: 0.5 },
+        scale: clamp(0.95 / Math.max(camera.size, 0.05), 0.2, 4),
+        opacity: 1,
+      },
+    },
+    {
+      label: t("画中画"),
+      target: {
+        position: { x: 0.84, y: 0.24 },
+        scale: clamp(0.24 / Math.max(camera.size, 0.05), 0.1, 4),
+        opacity: 1,
+      },
+    },
+    {
+      label: t("当前布局"),
+      target: { position: { ...camera.position }, scale: 1, opacity: 1 },
+    },
+  ];
+  for (const preset of layoutPresets) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn";
+    button.style.flex = "1";
+    button.textContent = preset.label;
+    button.addEventListener("click", () => addCameraMotionClip(preset.target));
+    presetRow.appendChild(button);
+  }
+  animation.appendChild(presetRow);
+  body.appendChild(animation);
+
   renderCameraPresets(body, camera);
+}
+
+/**
+ * Adds a camera motion clip at the playhead — the port of the original's
+ * playhead layout presets and 出现动画. The target blends from the camera's
+ * current layout; `entrance` clips keep the camera out of frame until they
+ * start and fade in with their own ramp.
+ */
+function addCameraMotionClip(target, { entrance = false } = {}) {
+  const id = rid();
+  store.commit(entrance ? t("添加摄像头出现动画") : t("添加摄像头动画"), (doc) => {
+    const clip = {
+      id,
+      startTime: Math.max(0, store.playhead),
+      duration: 1.6,
+      transitionIn: doc.motion.defaultZoomTransitionDuration,
+      transitionOut: doc.motion.defaultZoomTransitionDuration,
+      easing: doc.motion.defaultZoomEasing,
+      entrance,
+      target: {
+        position: { ...target.position },
+        scale: target.scale,
+        rotation: 0,
+        tiltX: 0,
+        tiltY: 0,
+        perspective: 0.65,
+        opacity: target.opacity ?? 1,
+        cornerRadius: doc.canvas.cornerRadius,
+      },
+    };
+    doc.timeline.cameraMotionClips.push(clip);
+    doc.timeline.cameraMotionClips.sort((a, b) => a.startTime - b.startTime);
+  });
+  store.select("cameraMotion", id);
+  paintInspector();
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2529,7 +2712,7 @@ function renderAudioTool(body) {
       override ? "custom" : "inherit",
       (value) => {
         if (!clip) {
-          toast(t("请先选择一个或多个主片段，再按 ⌥X 导出选区。").replace("⌥X", "Alt+X"), {
+          toast(t("请先选择一个主片段，再调整它的声音。"), {
             icon: "info",
           });
           return;
@@ -2803,6 +2986,16 @@ function renderStickerTool(body, clip) {
     }),
   ]);
   body.appendChild(exit);
+
+  const rhythm = section(t("动效节奏"));
+  group(rhythm, [
+    choiceGroup(
+      MOTION_CURVES.map((curve) => ({ value: curve.value, label: t(curve.label) })),
+      clip.animationCurve || "swift",
+      (value) => commit(t("调整贴图动效节奏"), withClip((target) => (target.animationCurve = value)))
+    ),
+  ]);
+  body.appendChild(rhythm);
 
   const layers = section(t("当前第 %lld 层，共 %lld 层", index + 1, list.length));
   const layerRow = document.createElement("div");

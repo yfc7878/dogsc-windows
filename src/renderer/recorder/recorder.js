@@ -103,6 +103,22 @@ const SOURCE_KINDS = [
   { value: "device", label: "设备", icon: "device" },
 ];
 
+/* Camera capture quality — the original's CameraCaptureResolution choices.
+   "自动" leaves the constraints off so the device picks its own default. */
+const CAMERA_RESOLUTIONS = {
+  自动: null,
+  "4K": { width: 3840, height: 2160 },
+  "1440p": { width: 2560, height: 1440 },
+  "1080p": { width: 1920, height: 1080 },
+  "720p": { width: 1280, height: 720 },
+};
+const CAMERA_RESOLUTION_OPTIONS = ["自动", "4K", "1440p", "1080p", "720p"];
+
+function cameraResolutionConstraint() {
+  const chosen = state.prefs.cameraResolution || "1080p";
+  return CAMERA_RESOLUTIONS[chosen] || CAMERA_RESOLUTIONS["1080p"] || {};
+}
+
 const state = {
   config: {
     /* No source kind is pre-selected: the user picks 显示器/窗口/区域/设备
@@ -182,6 +198,8 @@ async function boot() {
       "system-audio-unavailable": t("未收到可写入的系统声音样本，视频已保留"),
       "camera-unavailable": t("没有收到摄像头画面，已暂时关闭摄像头。请在摄像头菜单中重新选择后再试。"),
       "microphone-unavailable": t("麦克风录制失败：%@", "权限或设备不可用"),
+      "frame-drop": t("录制出现丢帧：可能与显卡负载、采集源或磁盘速度有关。"),
+      "frame-drop-recovered": t("丢帧已恢复，录制继续。"),
     };
     toast(table[message] || message, { icon: "info", duration: 3600 });
   });
@@ -283,9 +301,6 @@ function makeToggle(key, iconName, label) {
     openInputMenu(key, btn);
   });
   btn.addEventListener("dblclick", () => openInputMenu(key, btn));
-  btn.addEventListener("mousedown", (event) => {
-    if (event.button === 2) return;
-  });
   /* Long-press also opens the device list, matching the original's
      "click toggles, click-and-hold chooses" behaviour. */
   let holdTimer = null;
@@ -505,12 +520,6 @@ function closePanel() {
   if (panel.hidden) return;
   panel.hidden = true;
   state.activePanel = null;
-}
-
-function resizeForPanel(panelHeight) {
-  /* Kept for callers that still expect it; the window no longer needs to
-     resize because its height already covers the tallest panel. */
-  return Promise.resolve();
 }
 
 function renderDisplayPanel(host, options) {
@@ -789,6 +798,17 @@ async function openInputMenu(key, anchor) {
         })),
         ...(state.cameras.length ? [] : [{ label: t("未发现设备"), disabled: true }]),
         { separator: true },
+        { header: t("摄像头画质") },
+        ...CAMERA_RESOLUTION_OPTIONS.map((value) => ({
+          label: t(value),
+          checked: (state.prefs.cameraResolution || "1080p") === value,
+          onSelect: () => {
+            api.prefs.set("cameraResolution", value);
+            state.prefs.cameraResolution = value;
+            render();
+          },
+        })),
+        { separator: true },
         {
           label: t("镜像画面"),
           checked: state.prefs.mirrorCamera !== false,
@@ -923,7 +943,7 @@ function openSaveMenu() {
       },
       { label: t("设置"), onSelect: () => api.windows.openSettings() },
       { separator: true },
-      { label: t("退出DogSC"), onSelect: () => api.app.quit() },
+      { label: t("退出 DogSC"), onSelect: () => api.app.quit() },
     ],
     { align: "left", width: 250 }
   );
@@ -978,7 +998,15 @@ async function startRecording() {
     /* A device recording already uses the capture device as the main picture,
        so there is no separate picture-in-picture track to record. */
     camera:
-      !isDevice && state.config.camera ? { deviceId: state.config.cameraDeviceId } : null,
+      !isDevice && state.config.camera
+        ? {
+            deviceId: state.config.cameraDeviceId,
+            /* Seeds the project's camera mirror default; the editor keeps the
+               final say (document.camera.isMirrored). */
+            mirrored: state.prefs.mirrorCamera !== false,
+            ...cameraResolutionConstraint(),
+          }
+        : null,
     suggestedName: state.config.suggestedName,
   });
 
@@ -990,6 +1018,7 @@ async function startRecording() {
       "capture-timeout": t("录制未能开始，请重试或改用其他来源。"),
       "system-audio-unavailable": t("未收到可写入的系统声音样本，视频已保留"),
       "no-frames-captured": t("画面写入出现丢帧"),
+      "movie-delivery-failed": t("成片导出失败，项目包已保留；可稍后在编辑器里手动导出。"),
       "camera-unavailable": t("没有收到摄像头画面，已暂时关闭摄像头。请在摄像头菜单中重新选择后再试。"),
       "microphone-unavailable": t("麦克风录制失败：%@", "权限或设备不可用"),
     };

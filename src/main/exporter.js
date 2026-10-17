@@ -235,19 +235,86 @@ const H264_COLOR_TAGS = [
   "h264_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1:video_full_range_flag=0",
 ];
 
+/* 转码目标（HEVC / ProRes）的色彩标记：输出选项形式的 BT.709，任何编码器
+   都接受，不依赖 h264_metadata 这类按码流类型走的 bitstream filter。 */
+const COLOR_OUTPUT_TAGS = [
+  "-color_primaries", "bt709",
+  "-color_trc", "bt709",
+  "-colorspace", "bt709",
+];
+
+/* The original auto-switches past 4096 px to HEVC; the port offers it as a
+   choice and defaults the suggestion, so the flag only shapes the UI. */
+const HEVC_ENCODER_HINTS = ["libx265", "hevc_nvenc", "hevc_mf", "hevc_amf", "hevc_qsv"];
+
+let encoderCapabilities = null;
+
 /**
- * Wraps a WebCodecs bitstream into a silent MP4.
- * H.264 (Annex B) is copied straight through; VP9 / AV1 are transcoded.
+ * Probes which extra export encoders this ffmpeg build actually ships, once.
+ * ffmpeg-static's Windows binary carries libx265 and prores_ks in the usual
+ * builds, but the port refuses to promise a menu entry the binary cannot
+ * back — the option is hidden when the encoder is missing.
+ *
+ * `ffmpeg -encoders` prints its list on **stdout** (runFfmpeg only surfaces
+ * stderr), so this spawns ffmpeg directly and collects stdout.
  */
-async function wrapVideo({ codec, bitstreamPath, outputPath, fps, duration, signal, onProgress }) {
+function detectEncoders() {
+  if (encoderCapabilities) return Promise.resolve(encoderCapabilities);
+  return new Promise((resolve) => {
+    const caps = { hevc: false, hevcHardware: null, prores: false };
+    const child = spawn(ffmpegPath(), ["-hide_banner", "-encoders"], {
+      windowsHide: true,
+      env: childEnv(),
+    });
+    let stdout = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    const finish = () => {
+      for (const line of stdout.split(/\r?\n/)) {
+        /* Lines look like " V....D libx265  libx265 H.265 / HEVC …" — first
+           token is the flag column, second is the encoder name. */
+        const match = /^\s*\S+\s+(\S+)/.exec(line);
+        if (!match) continue;
+        const name = match[1];
+        if (name === "prores_ks") caps.prores = true;
+        if (HEVC_ENCODER_HINTS.includes(name)) {
+          caps.hevc = true;
+          if (name !== "libx265" && !caps.hevcHardware) caps.hevcHardware = name;
+        }
+      }
+      encoderCapabilities = caps;
+      resolve(caps);
+    };
+    child.on("close", finish);
+    child.on("error", () => {
+      encoderCapabilities = caps;
+      resolve(caps);
+    });
+  });
+}
+
+/**
+ * Wraps a WebCodecs bitstream into a silent video file.
+ * H.264 (Annex B) is copied straight through; VP9 / AV1 are transcoded.
+ * `target` asks for a final codec: "h264" (default) keeps the bitstream's
+ * codec, "hevc" copies an HEVC bitstream or transcodes H.264 via libx265,
+ * and "prores" always transcodes into Apple ProRes 422 (.mov) — the same
+ * intermediate-codec role the original's export pipeline gives it.
+ */
+async function wrapVideo({ codec, bitstreamPath, outputPath, fps, duration, signal, onProgress, target = "h264" }) {
   const normalized = String(codec || "").toLowerCase();
   const isH264 = normalized.startsWith("avc") || normalized === "h264";
+  const isHevc = normalized.startsWith("hev") || normalized === "h265";
   const isVp9 = normalized.startsWith("vp09") || normalized === "vp9";
   const isAv1 = normalized.startsWith("av01") || normalized === "av1";
 
   const args = [];
   if (isH264) {
     args.push("-f", "h264", "-r", String(fps), "-i", bitstreamPath);
+  } else if (isHevc) {
+    args.push("-f", "hevc", "-r", String(fps), "-i", bitstreamPath);
   } else if (isVp9) {
     args.push("-f", "ivf", "-i", bitstreamPath);
   } else if (isAv1) {
@@ -256,7 +323,31 @@ async function wrapVideo({ codec, bitstreamPath, outputPath, fps, duration, sign
     throw new Error(`unsupported codec ${codec}`);
   }
 
-  if (isH264) {
+  if (target === "prores") {
+    /* ProRes 422 (standard profile) in a .mov — the interchange codec the
+       original offers, at the cost of one extra generation from the
+       high-bitrate WebCodecs intermediate. */
+    args.push(
+      "-c:v", "prores_ks",
+      "-profile:v", "3",
+      "-vendor", "apl0",
+      "-pix_fmt", "yuv422p10le",
+      ...COLOR_OUTPUT_TAGS
+    );
+  } else if (target === "hevc" && isHevc) {
+    /* A hardware HEVC bitstream needs no re-encode, only a proper tag so
+       QuickTime-based players pick it up. */
+    args.push("-c:v", "copy", "-tag:v", "hvc1", ...COLOR_OUTPUT_TAGS);
+  } else if (target === "hevc") {
+    args.push(
+      "-c:v", "libx265",
+      "-preset", "medium",
+      "-crf", "20",
+      "-pix_fmt", "yuv420p",
+      ...COLOR_OUTPUT_TAGS,
+      "-tag:v", "hvc1"
+    );
+  } else if (isH264) {
     args.push("-c:v", "copy");
   } else {
     args.push(
@@ -270,7 +361,9 @@ async function wrapVideo({ codec, bitstreamPath, outputPath, fps, duration, sign
       "yuv420p"
     );
   }
-  args.push(...H264_COLOR_TAGS);
+  if (target === "h264" && isH264) {
+    args.push(...H264_COLOR_TAGS);
+  }
   args.push("-movflags", "+faststart", "-an", "-y", outputPath);
 
   await runFfmpeg(args, { signal, duration, onProgress });
@@ -303,23 +396,23 @@ async function mux({ videoPath, audioPath, outputPath, duration, signal }) {
 
 /**
  * Used when WebCodecs cannot provide an encoder. Frames arrive as JPEG data
- * URLs from the renderer and are turned into an H.264 MP4 by ffmpeg.
+ * URLs from the renderer and are turned into a video by ffmpeg. `target`
+ * picks the final codec — H.264 (default), HEVC via libx265, or ProRes 422
+ * in a .mov, matching wrapVideo's targets.
  */
-async function encodeImageSequence({ framesDir, pattern, fps, outputPath, signal, duration, onProgress }) {
+async function encodeImageSequence({ framesDir, pattern, fps, outputPath, signal, duration, onProgress, target = "h264" }) {
+  const codecArgs =
+    target === "prores"
+      ? ["-c:v", "prores_ks", "-profile:v", "3", "-vendor", "apl0", "-pix_fmt", "yuv422p10le", ...COLOR_OUTPUT_TAGS]
+      : target === "hevc"
+        ? ["-c:v", "libx265", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", ...COLOR_OUTPUT_TAGS, "-tag:v", "hvc1"]
+        : ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", ...H264_COLOR_TAGS];
   const args = [
     "-framerate",
     String(fps),
     "-i",
     path.join(framesDir, pattern),
-    "-c:v",
-    "libx264",
-    "-preset",
-    "medium",
-    "-crf",
-    "18",
-    "-pix_fmt",
-    "yuv420p",
-    ...H264_COLOR_TAGS,
+    ...codecArgs,
     "-movflags",
     "+faststart",
     "-y",
@@ -491,4 +584,5 @@ module.exports = {
   probeDuration,
   probeMedia,
   buildAudioGraph,
+  detectEncoders,
 };

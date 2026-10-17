@@ -20,6 +20,11 @@ const DEFAULTS = {
   cameraEnabled: false,
   microphoneDeviceId: null,
   cameraDeviceId: null,
+  /* Camera capture quality: 自动 / 4K / 1440p / 1080p / 720p. */
+  cameraResolution: "1080p",
+  /* Recorder-bar camera menu: mirror the camera picture by default. Seeds the
+     new project's camera.isMirrored, which the editor can still toggle. */
+  mirrorCamera: true,
   hideDesktopIcons: false,
   showFloatingCameraPreview: true,
   alertSounds: true,
@@ -29,13 +34,10 @@ const DEFAULTS = {
   exportLocation: null,
   playAfterExport: true,
 
-  /* Preview */
-  previewQuality: "smooth",
+  /* Preview — the original defaults to full-resolution preview (0.1.1). */
+  previewQuality: "full",
   /* Timeline clips show the audio waveform instead of thumbnails. */
   waveformClips: false,
-
-  /* Updates */
-  autoCheckUpdates: true,
 
   /* Window geometry */
   editorBounds: null,

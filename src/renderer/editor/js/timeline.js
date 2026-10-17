@@ -15,7 +15,7 @@ import {
   clamp,
 } from "../../shared/widgets.js";
 import { clipDuration, timelineDuration } from "./model.js";
-import { store, reflowClips } from "./store.js";
+import { store, reflowClips, moveClipToTime } from "./store.js";
 
 const BASE_PPS = 64; // pixels per second at zoom 1
 const MIN_PPS = 8;
@@ -80,15 +80,6 @@ export function mountTimeline(root) {
     paint();
   });
   scroller.addEventListener("wheel", onWheel, { passive: false });
-  scroller.addEventListener("mousemove", (event) => {
-    const lanes = document.getElementById("track-lanes");
-    if (!lanes) return;
-    const rect = lanes.getBoundingClientRect();
-    state.hoverTime = Math.max(0, (event.clientX - rect.left) / pps());
-  });
-  scroller.addEventListener("mouseleave", () => {
-    state.hoverTime = null;
-  });
   scroller.addEventListener("mousemove", (event) => {
     const lanes = document.getElementById("track-lanes");
     if (!lanes) return;
@@ -760,6 +751,38 @@ function onPrimaryDown(event, clip) {
     additive: event.ctrlKey || event.metaKey,
     range: event.shiftKey,
   });
+
+  /* A horizontal drag on the clip body reorders it — the original's
+     `movePrimarySegment`. A plain click still just selects; the trim handles
+     below keep their own drag. Modifier clicks are selection gestures, so
+     they never start a reorder. */
+  if (!handle && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+    const lane = event.currentTarget.parentElement;
+    const startX = event.clientX;
+    let reordering = false;
+    const move = (moveEvent) => {
+      if (!reordering) {
+        if (Math.abs(moveEvent.clientX - startX) <= 6) return;
+        reordering = true;
+        store.beginGesture();
+      }
+      store.apply((doc) => {
+        doc.timeline.primaryClips = moveClipToTime(
+          doc.timeline.primaryClips,
+          clip.id,
+          timeFromEvent(moveEvent, lane)
+        );
+      });
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      if (reordering) store.commitGesture("重排主片段");
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }
+
   if (!handle) return;
 
   const startX = event.clientX;
@@ -1060,16 +1083,20 @@ export function step(frames) {
 
 let rafId = null;
 let lastTick = 0;
+/** When set, playback stops at this timeline time (inspector audition). */
+let playUntil = null;
 
 export function togglePlay() {
   if (store.playing) stopPlayback();
   else startPlayback();
 }
 
-export function startPlayback() {
+export function startPlayback(until = null) {
   if (!store.document) return;
   if (store.playhead >= store.duration - 0.01) store.setPlayhead(0);
   store.playing = true;
+  /* Optional stop time, used by the inspector's sync audition. */
+  playUntil = until != null && until > store.playhead ? until : null;
   lastTick = performance.now();
   syncMedia(true);
   rafId = requestAnimationFrame(tick);
@@ -1078,6 +1105,7 @@ export function startPlayback() {
 
 export function stopPlayback() {
   store.playing = false;
+  playUntil = null;
   if (rafId) cancelAnimationFrame(rafId);
   rafId = null;
   syncMedia(false);
@@ -1089,8 +1117,8 @@ function tick(now) {
   const delta = (now - lastTick) / 1000;
   lastTick = now;
   const next = store.playhead + delta;
-  if (next >= store.duration) {
-    store.setPlayhead(store.duration);
+  if (next >= store.duration || (playUntil != null && next >= playUntil)) {
+    store.setPlayhead(playUntil != null ? Math.min(next, playUntil) : store.duration);
     stopPlayback();
     return;
   }
@@ -1116,7 +1144,10 @@ export function syncMedia(playing) {
     }
   }
   const camera = store.media.camera;
-  const cameraTime = Math.max(0, sourceTime - (doc.media?.camera?.offset || 0));
+  const cameraTime = Math.max(
+    0,
+    sourceTime - (doc.media?.camera?.offset || 0) - (doc.camera?.syncOffset || 0)
+  );
   if (camera && Math.abs((camera.currentTime || 0) - cameraTime) > 0.12) {
     try {
       camera.currentTime = cameraTime;

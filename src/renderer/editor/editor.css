@@ -103,6 +103,15 @@
   overflow: hidden;
 }
 
+/* The inspector is width-driven, not content-driven: layoutInspector() sets
+   --inspector-width from the window size the same way the original's
+   EditorWorkspaceLayout clamps 0.23 × width into 384–432 pt (×0.86 compact). */
+.workspace > .inspector {
+  flex: none;
+  width: var(--inspector-width, 400px);
+  min-width: 0;
+}
+
 .tool-rail {
   flex: none;
   width: 72px;
@@ -1218,4 +1227,53 @@
   gap: 7px;
   font-size: 11.5px;
   color: var(--secondary-text);
+}
+
+/* --------------------------------------------------------------------------
+   Window compression
+   The original compresses its chrome in steps as the window narrows
+   (<1320 compact, <1120 narrow): tighter paddings, smaller rail and track
+   headers. The classes are toggled by layoutInspector() on resize.
+   -------------------------------------------------------------------------- */
+
+body.window-compact .workspace {
+  padding: 8px;
+  gap: 8px;
+}
+body.window-compact .top-bar {
+  height: 42px;
+}
+body.window-compact .tool-rail {
+  width: 62px;
+  padding: 6px;
+}
+body.window-compact .timeline {
+  margin: 0 8px 8px;
+}
+body.window-compact .timeline-toolbar {
+  padding: 4px 8px;
+  gap: 6px;
+}
+body.window-compact .track-headers {
+  width: 108px;
+}
+body.window-compact .project-title {
+  max-width: 220px;
+}
+
+body.window-narrow .track-headers {
+  width: 92px;
+}
+body.window-narrow .timecode {
+  min-width: 96px;
+  font-size: 12px;
+}
+body.window-narrow .toolbar-right .chip {
+  height: 24px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+body.window-narrow .track-header {
+  padding: 0 6px 0 9px;
+  font-size: 11.5px;
 }

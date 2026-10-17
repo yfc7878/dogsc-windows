@@ -391,9 +391,58 @@ async function begin({ displayId, region, scaleFactor, fps = 60, width, height, 
   };
 }
 
+/**
+ * 崩溃恢复：把中断采集留下的裸 H.264 段离线重封装并拼接成 screen.mp4。
+ * 这是 finish() 的收尾部分，不需要活的 ffmpeg 子进程 —— 录制崩溃后重启时
+ * 由恢复流程调用。成功后删除裸流段，保证同一工作目录不会二次恢复。
+ * 返回值与 finish() 一致（firstFrameTime 不可知，由调用方从清单取）。
+ */
+async function salvage(workingDir, fps = 60) {
+  const names = (await fsp.readdir(workingDir).catch(() => []))
+    .filter((name) => /^screen-ff-\d+\.h264$/.test(name))
+    .sort((a, b) => Number(a.match(/\d+/)[0]) - Number(b.match(/\d+/)[0]));
+  const usable = names
+    .map((name) => path.join(workingDir, name))
+    .filter((file) => fs.existsSync(file) && fs.statSync(file).size > 4096);
+  if (!usable.length) return null;
+
+  const parts = [];
+  for (let index = 0; index < usable.length; index += 1) {
+    const mp4 = path.join(workingDir, `recovered-part-${index}.mp4`);
+    await exporter.runFfmpeg([
+      "-loglevel", "error",
+      "-f", "h264", "-r", String(fps),
+      "-i", usable[index],
+      "-c", "copy", "-movflags", "+faststart", mp4,
+    ]);
+    parts.push(mp4);
+  }
+
+  const output = path.join(workingDir, "screen.mp4");
+  if (parts.length === 1) {
+    await fsp.rename(parts[0], output);
+  } else {
+    const list = path.join(workingDir, "recovered-concat.txt");
+    await fsp.writeFile(list, parts.map((part) => `file '${path.basename(part)}'`).join("\n"), "utf8");
+    await exporter.runFfmpeg(["-loglevel", "error", "-f", "concat", "-safe", "0", "-i", list, "-c", "copy", "-movflags", "+faststart", output]);
+    await Promise.all(parts.map((part) => fsp.rm(part, { force: true })));
+    await fsp.rm(list, { force: true });
+  }
+  await Promise.all(usable.map((file) => fsp.rm(file, { force: true })));
+
+  const info = await probeVideo(output);
+  if (!info.duration) return null;
+  return {
+    file: output,
+    duration: info.duration,
+    width: info.width,
+    height: info.height,
+    firstFrameTime: null,
+  };
+}
+
 /** 解析 ffmpeg -i 输出，取时长与视频尺寸（不依赖 ffprobe）。 */
-async function probeVideo(file) {
-  let stderr = "";
+async function probeVideo(file) {  let stderr = "";
   try {
     await exporter.runFfmpeg(["-i", file, "-hide_banner"]);
   } catch (error) {
@@ -505,6 +554,7 @@ module.exports = {
   detectEncoder,
   outputIndexFor,
   begin,
+  salvage,
   probeVideo,
   diagnose,
   probeDdagrab,

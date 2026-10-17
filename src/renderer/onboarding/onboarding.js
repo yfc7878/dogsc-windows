@@ -51,6 +51,9 @@ const STEPS = [
 
 const state = { index: 0 };
 
+/** Set while the brand intro plays; Escape/click dismisses it instead of the guide. */
+let brandDismiss = null;
+
 async function boot() {
   setLocale("zh-Hans");
   render();
@@ -62,6 +65,11 @@ async function boot() {
     render();
   });
   document.addEventListener("keydown", (event) => {
+    /* The brand intro owns every key until it is dismissed. */
+    if (brandDismiss) {
+      if (event.key === "Escape") brandDismiss();
+      return;
+    }
     if (event.key === "Escape") finish();
     if (event.key === "ArrowRight" || event.key === "Enter") next();
     if (event.key === "ArrowLeft") {
@@ -69,6 +77,36 @@ async function boot() {
       render();
     }
   });
+
+  playBrandIntro();
+}
+
+/**
+ * The opening brand animation — the port of the original's light-field intro
+ * (glow, logo pop, wordmark rising, subtitle). Runs about 2.6 s and is
+ * skippable with Esc or a click; the guide is already built behind it, so a
+ * skip is instant.
+ */
+function playBrandIntro() {
+  const intro = document.getElementById("intro");
+  const brand = document.getElementById("brand");
+  if (!intro || !brand) return;
+
+  intro.classList.add("is-intro");
+  brand.classList.add("is-on");
+
+  let done = false;
+  const dismiss = () => {
+    if (done) return;
+    done = true;
+    brandDismiss = null;
+    brand.classList.add("is-off");
+    intro.classList.remove("is-intro");
+    window.setTimeout(() => brand.remove(), 500);
+  };
+  brandDismiss = dismiss;
+  brand.addEventListener("click", dismiss);
+  window.setTimeout(dismiss, 2600);
 }
 
 async function next() {

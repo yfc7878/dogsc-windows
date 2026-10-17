@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; media-src 'self' mediastream: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    />
+    <link rel="stylesheet" href="../shared/tokens.css" />
+    <link rel="stylesheet" href="../shared/ui.css" />
+    <link rel="stylesheet" href="./floating-camera.css" />
+    <title>摄像头预览</title>
+  </head>
+  <body>
+    <div class="fc-surface js-drag" id="surface">
+      <video id="video" class="fc-video" playsinline autoplay muted></video>
+      <div class="fc-status" id="status" hidden></div>
+      <button class="fc-close no-drag" id="btn-close" type="button" title="关闭预览"></button>
+    </div>
+    <script type="module" src="./floating-camera.js"></script>
+  </body>
+</html>

@@ -6,11 +6,11 @@ several declarations defined twice. This keeps the first definition of each
 top-level function and drops later duplicates, then reports what it removed.
 """
 import io
-import os
 import re
 import sys
 
-os.chdir(r"D:\CXY\Documents\work\2026-10-10-17-25-20\DogSC-Windows")
+# File paths come from argv; no directory change needed (the old hardcoded
+# chdir broke this tool outside the original machine).
 
 DECL = re.compile(r"^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(", re.M)
 

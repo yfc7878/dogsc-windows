@@ -43,6 +43,26 @@ async function boot() {
   const display = displays.find((entry) => String(entry.id) === String(state.displayId));
   if (display) state.scaleFactor = display.scaleFactor;
 
+  /* Restore the previous selection on this display, so re-recording the same
+     region does not mean dragging it out again. A different display (or a
+     first run) starts from an empty overlay. */
+  const prefs = await api.prefs.all();
+  const last = prefs.lastAreaRegion;
+  if (
+    last &&
+    String(last.displayId) === String(state.displayId) &&
+    Number(last.width) >= MIN_SIZE &&
+    Number(last.height) >= MIN_SIZE
+  ) {
+    state.rect = clampToViewport({
+      x: Number(last.x) || 0,
+      y: Number(last.y) || 0,
+      width: Number(last.width) || 0,
+      height: Number(last.height) || 0,
+    });
+    paint();
+  }
+
   document.getElementById("btn-cancel").addEventListener("click", () => window.close());
   document.getElementById("btn-confirm").addEventListener("click", confirm);
 
@@ -189,7 +209,7 @@ async function confirm() {
     width: Math.round(state.rect.width),
     height: Math.round(state.rect.height),
   };
-  await api.prefs.set("lastAreaRegion", region);
+  await api.prefs.set("lastAreaRegion", { ...region, displayId: state.displayId });
 
   /* The recorder bar owns the capture session, so it is brought forward and
      asked to start with the authored region. The main process resolves the

@@ -46,7 +46,7 @@ class EditorStore {
     this.snapping = true;
     this.hoverPreview = false;
     this.restoreCutMode = false;
-    this.previewQuality = "smooth";
+    this.previewQuality = "full";
     this.saving = false;
     /** Save-pipeline state the editor's persistence badge reflects. */
     this.saveStatus = "clean"; // clean | dirty | saving | failed
@@ -68,6 +68,11 @@ class EditorStore {
     this.cameraLayoutPresets = [];
     /** Name of the scene preset new recordings start from. */
     this.defaultSceneName = null;
+    /**
+     * Set when the package's `project.json` was unreadable and the last
+     * known-good `project.previous.json` was opened instead.
+     */
+    this.recoveredFromPreviousRevision = false;
   }
 
   /* --------------------------------------------------------------------- */
@@ -94,9 +99,33 @@ class EditorStore {
   /* --------------------------------------------------------------------- */
 
   async load(packagePath) {
-    const { document } = await api.project.open(packagePath);
+    const opened = await api.project.open(packagePath);
+    if (!opened?.ok) {
+      /* The main process refuses future-schema packages rather than
+         downgrading them; surface the reason so the UI can explain. */
+      const error = new Error(`project:open failed (${opened?.reason || "unknown"})`);
+      error.reason = opened?.reason || "open-failed";
+      error.schemaVersion = opened?.schemaVersion ?? null;
+      throw error;
+    }
+    this.recoveredFromPreviousRevision = opened.recoveredFromPreviousRevision === true;
+    const { document } = opened;
     this.packagePath = packagePath;
     this.document = normalizeDocument(document);
+    /* Pointer events live in `events/pointer.jsonl` (the original's durable
+       journal); hydrate them into memory so every downstream consumer keeps
+       working with plain arrays. Old packages carry the track inline and
+       skip this entirely. */
+    const track = this.document.pointerTrack;
+    if (track?.path && !track.samples.length) {
+      const journal = await api.project
+        .pointerSamples({ packagePath, relative: track.path })
+        .catch(() => null);
+      if (journal) {
+        track.samples = journal.samples || [];
+        track.clicks = journal.clicks || [];
+      }
+    }
     this.selection = { kind: "canvas", id: null };
     this.playhead = 0;
     this.history = [];
@@ -685,12 +714,22 @@ class EditorStore {
   deleteSelection() {
     const { kind, id } = this.selection;
     if (kind === "primary") {
-      if (this.document.timeline.primaryClips.length <= 1) return;
+      /* Delete every selected clip when there is a multi-selection; the
+         single-selection path below used to swallow the multi case (its
+         branch was unreachable), so Delete only ever removed one clip. */
+      const ids =
+        this.selectedPrimaryIds.size > 1 && this.selectedPrimaryIds.has(id)
+          ? this.selectedPrimaryIds
+          : new Set([id]);
+      if (this.document.timeline.primaryClips.length - ids.size < 1) return;
       this.commit("删除主片段", (doc) => {
         doc.timeline.primaryClips = reflowClips(
-          doc.timeline.primaryClips.filter((clip) => clip.id !== id)
+          doc.timeline.primaryClips.filter((clip) => !ids.has(clip.id))
         );
       });
+      const remaining = this.document.timeline.primaryClips[0]?.id || null;
+      this.selectedPrimaryIds = new Set(remaining ? [remaining] : []);
+      this.primaryAnchor = remaining;
       this.select("canvas");
       return;
     }
@@ -722,19 +761,6 @@ class EditorStore {
       this.select("canvas");
       return;
     }
-    if (kind === "primary" && this.selectedPrimaryIds.size > 1) {
-      if (this.document.timeline.primaryClips.length - this.selectedPrimaryIds.size < 1) return;
-      this.commit("删除主片段", (doc) => {
-        doc.timeline.primaryClips = reflowClips(
-          doc.timeline.primaryClips.filter((clip) => !this.selectedPrimaryIds.has(clip.id))
-        );
-      });
-      const remaining = this.document.timeline.primaryClips[0]?.id || null;
-      this.selectedPrimaryIds = new Set(remaining ? [remaining] : []);
-      this.primaryAnchor = remaining;
-      this.select("canvas");
-      return;
-    }
     if (kind === "mosaic") {
       this.commit("删除柔化", (doc) => {
         doc.timeline.mosaicClips = doc.timeline.mosaicClips.filter((clip) => clip.id !== id);
@@ -748,6 +774,100 @@ class EditorStore {
       });
       this.select("canvas");
     }
+  }
+
+  /* --------------------------------------------------------------------- */
+  /* Ripple delete + Q/W trimming (the original's Q / W bindings)          */
+  /* --------------------------------------------------------------------- */
+
+  /**
+   * Q: trims the selected effect clip's start to the playhead; with no effect
+   * clip selected, ripple-deletes everything before the playhead — the part
+   * of the straddling clip included, so the timeline starts at the playhead.
+   * @returns {boolean} whether anything changed
+   */
+  trimStartToPlayhead() {
+    if (this.trimSelectedEffect("start")) return true;
+    return this.rippleDelete("before");
+  }
+
+  /**
+   * W: trims the selected effect clip's end to the playhead; with no effect
+   * clip selected, ripple-deletes everything after the playhead.
+   * @returns {boolean} whether anything changed
+   */
+  trimEndToPlayhead() {
+    if (this.trimSelectedEffect("end")) return true;
+    return this.rippleDelete("after");
+  }
+
+  /** Trims the selected effect clip (zoom / 3D / camera motion / sticker / mosaic). */
+  trimSelectedEffect(edge) {
+    const { kind, id } = this.selection;
+    const list = this.listFor(kind);
+    const clip = list?.find((entry) => entry.id === id);
+    if (!clip) return false;
+    const start = clip.startTime;
+    const end = start + (clip.duration || 0);
+    const time = this.playhead;
+    if (!(time > start + 0.02 && time < end - 0.02)) return false;
+    this.commit(edge === "start" ? "修剪片段起点" : "修剪片段终点", (doc) => {
+      const target = this.listFor(kind, doc)?.find((entry) => entry.id === id);
+      if (!target) return;
+      if (edge === "start") {
+        target.startTime = time;
+        target.duration = end - time;
+      } else {
+        target.duration = time - start;
+      }
+    });
+    return true;
+  }
+
+  /**
+   * Ripple delete: drops the primary material on one side of the playhead and
+   * closes the gap, exactly like the original's ripple delete. The clip under
+   * the playhead is trimmed instead of dropped, so at least one clip always
+   * survives. No-op when the playhead sits outside the material.
+   * @param {"before"|"after"} side
+   * @returns {boolean} whether anything changed
+   */
+  rippleDelete(side) {
+    const time = this.playhead;
+    const before = side === "before";
+    if (before ? time <= 0.05 : time >= this.duration - 0.05) return false;
+
+    let changed = false;
+    this.commit(before ? "波纹删除前段" : "波纹删除后段", (doc) => {
+      const kept = [];
+      for (const clip of doc.timeline.primaryClips) {
+        const start = clip.startTime;
+        const end = start + clipDuration(clip);
+        if (before ? end <= time + 0.001 : start >= time - 0.001) {
+          if (before) changed = true; // entirely before → dropped
+          continue;
+        }
+        if (before ? start >= time - 0.001 : end <= time + 0.001) {
+          kept.push(clip); // entirely on the kept side
+          continue;
+        }
+        /* Straddles the playhead → trim to it. */
+        changed = true;
+        if (before) {
+          const offset = time - start;
+          kept.push({
+            ...clip,
+            sourceStart: clip.sourceStart + offset * (clip.speed || 1),
+            sourceDuration: clip.sourceDuration - offset * (clip.speed || 1),
+          });
+        } else {
+          kept.push({ ...clip, sourceDuration: (time - start) * (clip.speed || 1) });
+        }
+      }
+      if (!kept.length || !changed) return;
+      doc.timeline.primaryClips = reflowClips(kept);
+    });
+    return changed;
   }
 }
 
@@ -764,11 +884,47 @@ export function reflowClips(clips) {
   });
 }
 
+/**
+ * Moves the clip `id` to the position the timeline time `time` falls on —
+ * the port of the original's `movePrimarySegment`. The target index is the
+ * clip whose span contains `time` (nearest edge when past either end), and
+ * the result is reflowed so the moved clip starts where it landed.
+ *
+ * Returns the same array instance when nothing would change, so callers can
+ * use it inside `apply()` during a live drag without churning the document.
+ */
+export function moveClipToTime(clips, id, time) {
+  const from = clips.findIndex((clip) => clip.id === id);
+  if (from < 0) return clips;
+  let to = clips.length - 1;
+  let acc = 0;
+  for (let i = 0; i < clips.length; i += 1) {
+    const span = clipDuration(clips[i]);
+    if (time < acc + span / 2) {
+      to = i;
+      break;
+    }
+    acc += span;
+  }
+  to = Math.max(0, Math.min(clips.length - 1, to));
+  if (to === from) return clips;
+  const moved = [...clips];
+  const [clip] = moved.splice(from, 1);
+  moved.splice(to, 0, clip);
+  return reflowClips(moved);
+}
+
 /** Removes the runtime-only fields the renderer caches on the document. */
 export function stripRuntime(document_) {
   const copy = structuredClone(document_);
   delete copy.__sourceSize;
   delete copy.__cameraSize;
+  /* Hydrated pointer events belong to `events/pointer.jsonl`; writing them
+     back inline would re-bloat project.json on every autosave. */
+  if (copy.pointerTrack?.path) {
+    delete copy.pointerTrack.samples;
+    delete copy.pointerTrack.clicks;
+  }
   return copy;
 }
 

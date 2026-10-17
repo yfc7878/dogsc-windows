@@ -17,6 +17,171 @@ body {
   overflow: hidden;
 }
 
+/* While the brand intro plays, the guide itself stays hidden. */
+.intro.is-intro .intro-body,
+.intro.is-intro .intro-foot,
+.intro.is-intro > .glow {
+  opacity: 0;
+  pointer-events: none;
+}
+.intro-body,
+.intro-foot,
+.intro > .glow {
+  transition: opacity 0.4s ease;
+}
+
+/* ---- Brand intro ---- */
+
+.brand {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0b0c0d;
+  opacity: 0;
+  transition: opacity 0.45s ease;
+}
+.brand.is-on {
+  opacity: 1;
+}
+.brand.is-off {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.brand-glow {
+  position: absolute;
+  inset: -30% -20% auto -20%;
+  height: 90%;
+  background: radial-gradient(
+    ellipse at 50% 30%,
+    rgba(242, 240, 234, 0.2),
+    rgba(94, 204, 145, 0.1) 40%,
+    transparent 72%
+  );
+  animation: brand-breathe 2.6s ease-in-out both;
+}
+
+@keyframes brand-breathe {
+  0% {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+  35% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0.85;
+    transform: scale(1.04);
+  }
+}
+
+.brand-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.brand-logo {
+  width: 76px;
+  height: 76px;
+  border-radius: 21px;
+  background: linear-gradient(160deg, #3a3f47, #171a1e);
+  border: 0.75px solid rgba(255, 255, 255, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 34px;
+  font-weight: 700;
+  color: #f2f0ea;
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.5);
+  animation: brand-pop 0.6s cubic-bezier(0.2, 1.4, 0.4, 1) 0.25s both;
+}
+
+@keyframes brand-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.brand-word {
+  display: flex;
+  gap: 2px;
+  font-size: 44px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.brand-word span {
+  display: inline-block;
+  animation: brand-rise 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.05) both;
+}
+.brand-word span:nth-child(1) { animation-delay: 0.7s; }
+.brand-word span:nth-child(2) { animation-delay: 0.76s; }
+.brand-word span:nth-child(3) { animation-delay: 0.82s; }
+.brand-word span:nth-child(4) { animation-delay: 0.88s; }
+.brand-word span:nth-child(5) { animation-delay: 0.94s; }
+
+@keyframes brand-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.brand-sub {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: 0.34em;
+  text-indent: 0.34em;
+  color: rgba(242, 240, 234, 0.72);
+  animation: brand-fade 0.6s ease 1.5s both;
+}
+
+.brand-skip-hint {
+  position: absolute;
+  bottom: -64px;
+  margin: 0;
+  font-size: 11.5px;
+  color: rgba(242, 240, 234, 0.34);
+  animation: brand-fade 0.6s ease 1.9s both;
+}
+
+@keyframes brand-fade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-glow,
+  .brand-logo,
+  .brand-word span,
+  .brand-sub,
+  .brand-skip-hint {
+    animation-duration: 0.01s;
+    animation-delay: 0s;
+  }
+}
+
 .glow {
   position: absolute;
   inset: -20% -10% auto -10%;

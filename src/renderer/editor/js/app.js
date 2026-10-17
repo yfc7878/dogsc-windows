@@ -60,7 +60,7 @@ async function boot() {
   const prefs = await api.prefs.all();
   const theme = await api.app.theme();
   document.documentElement.dataset.theme = theme.dark ? "dark" : "light";
-  store.previewQuality = prefs.previewQuality || "smooth";
+  store.previewQuality = prefs.previewQuality || "full";
   store.scenePresets = Array.isArray(prefs.scenePresets) ? prefs.scenePresets : [];
   store.defaultSceneName = prefs.defaultScenePreset?.name || null;
   /* Remembered from the last session, like the original's `waveform-clips`. */
@@ -69,6 +69,16 @@ async function boot() {
     ? prefs.cameraLayoutPresets
     : [];
   store.snapping = true;
+
+  /* Live-applied so the Settings switch takes effect without reopening the
+     editor, mirroring the original's instant preview-quality switch. */
+  api.on("app:prefs", (payload) => {
+    const next = payload?.previewQuality || "full";
+    if (next !== store.previewQuality) {
+      store.previewQuality = next;
+      resizePreview();
+    }
+  });
 
   ui.canvas = document.getElementById("preview-canvas");
   ui.needsRender = false;
@@ -85,9 +95,11 @@ async function boot() {
 
   store.subscribe(() => queueRender());
   window.addEventListener("resize", () => {
+    layoutInspector();
     resizePreview();
     queueRender();
   });
+  layoutInspector();
 
   api.on("app:theme", (payload) => {
     document.documentElement.dataset.theme = payload.dark ? "dark" : "light";
@@ -122,7 +134,7 @@ async function openLastOrCreate() {
   const last = prefs.lastProjectPath;
   if (last) {
     const result = await api.project.open(last).catch(() => null);
-    if (result) {
+    if (result?.ok) {
       await openProject(last);
       return;
     }
@@ -149,11 +161,18 @@ async function openProject(packagePath) {
   try {
     await store.load(packagePath);
   } catch (error) {
-    toast(t("无法读取当前项目素材"), { icon: "info" });
+    if (error?.reason === "unsupported-future-version") {
+      toast(t("此项目由更新版本的 DogSC 创建，请升级后再打开。"), { icon: "warning", duration: 5000 });
+    } else {
+      toast(t("无法读取当前项目素材"), { icon: "info" });
+    }
     showEmptyState();
     return;
   }
   document.getElementById("empty-state").hidden = true;
+  if (store.recoveredFromPreviousRevision) {
+    toast(t("项目文件已损坏，已从上一个版本恢复。"), { icon: "warning", duration: 5000 });
+  }
   document.getElementById("project-name").textContent = store.document.name;
   document.title = `${store.document.name} — DogSC`;
   /* The rail is built before the document exists, so which tools the project
@@ -209,9 +228,7 @@ function buildTopBar() {
   const bar = document.getElementById("top-bar");
 
   const sidebar = topButton("sidebar", t("显示 / 隐藏检查器"), () => {
-    const inspector = document.getElementById("inspector");
-    inspector.hidden = !inspector.hidden;
-    resizePreview();
+    toggleInspector();
   });
   sidebar.id = "btn-sidebar";
 
@@ -868,6 +885,26 @@ function addCameraMotion() {
 /* Preview                                                                   */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * Sizes the inspector and the compact-chrome classes the way the original's
+ * `EditorWorkspaceLayout` does: the inspector takes a 0.23 slice of the
+ * window clamped to 384–432 logical pt, scaled ×0.86 inside the compact band
+ * (<1320). The port's inspector used to be content-driven, which let the
+ * column wander on wide windows; <1120 additionally flips the narrow
+ * compression step (tighter track headers and toolbar) the original applies.
+ */
+function layoutInspector() {
+  const width = window.innerWidth;
+  const compact = width < 1320;
+  const logical = Math.min(Math.max(width * 0.23, 384), 432);
+  document.documentElement.style.setProperty(
+    "--inspector-width",
+    `${Math.round(logical * (compact ? 0.86 : 1))}px`
+  );
+  document.body.classList.toggle("window-compact", compact);
+  document.body.classList.toggle("window-narrow", width < 1120);
+}
+
 function resizePreview() {
   const host = document.getElementById("preview-host");
   const canvas = ui.canvas;
@@ -887,15 +924,21 @@ function resizePreview() {
   height = Math.max(80, Math.floor(height));
 
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = Math.floor(width * dpr);
-  canvas.height = Math.floor(height * dpr);
+  /* 「播放更流畅」 halves the backing store: the compositor draws half as many
+     pixels and the browser upscales, which is what keeps big projects scrubbing
+     smoothly. The export path renders at full resolution regardless — the
+     setting only ever reaches this preview surface. */
+  const quality = store.previewQuality === "full" ? 1 : 0.5;
+  const scale = dpr * quality;
+  canvas.width = Math.max(2, Math.floor(width * scale));
+  canvas.height = Math.max(2, Math.floor(height * scale));
   canvas.style.width = `${width}px`;
   canvas.style.height = `${height}px`;
-  ui.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ui.ctx.setTransform(scale, 0, 0, scale, 0, 0);
   ui.displaySize = { width, height };
   /* Kept so `render()` can hand the compositor the same scale the canvas was
      sized with — the frame must fill the whole backing store. */
-  ui.displayScale = dpr;
+  ui.displayScale = scale;
 
   layoutCropOverlay();
 }
@@ -1150,6 +1193,13 @@ function buildSplitter() {
 /* Commands + shortcuts                                                      */
 /* ------------------------------------------------------------------------- */
 
+/** Shows or hides the inspector column (the original's ⌥⌘I). */
+function toggleInspector() {
+  const inspector = document.getElementById("inspector");
+  inspector.hidden = !inspector.hidden;
+  resizePreview();
+}
+
 function installShortcuts() {
   window.addEventListener("keydown", (event) => {
     const inField = event.target.closest("input, textarea, [contenteditable=true]");
@@ -1180,6 +1230,11 @@ function installShortcuts() {
     if (mod && event.altKey && event.key.toLowerCase() === "x") {
       event.preventDefault();
       exportSelection();
+      return;
+    }
+    if (mod && event.altKey && event.key.toLowerCase() === "i") {
+      event.preventDefault();
+      toggleInspector();
       return;
     }
     if (mod && event.key.toLowerCase() === "z") {
@@ -1215,6 +1270,17 @@ function installShortcuts() {
     }
     if (event.key.toLowerCase() === "s" && !mod) {
       store.splitAtPlayhead();
+      return;
+    }
+    /* Q/W: trim the selected effect clip to the playhead, or ripple-delete
+       the primary material on that side when no effect clip is selected —
+       the original's bindings. */
+    if (event.key.toLowerCase() === "q" && !mod) {
+      store.trimStartToPlayhead();
+      return;
+    }
+    if (event.key.toLowerCase() === "w" && !mod) {
+      store.trimEndToPlayhead();
       return;
     }
     if (event.key === "ArrowLeft") {
@@ -1296,7 +1362,7 @@ function openExport(range) {
 function exportSelection() {
   const range = store.selectedRange();
   if (!range || !range.clips.length) {
-    toast(t("请先选择一个或多个主片段，再按 ⌥X 导出选区。"), { icon: "info", duration: 3600 });
+    toast(t("请先选择一个或多个主片段，再按 Alt+X 导出选区。"), { icon: "info", duration: 3600 });
     return;
   }
   openExport(range);
@@ -1336,7 +1402,7 @@ function showShortcuts() {
       items: [
         [t("空格"), t("播放 / 暂停")],
         ["← / →", t("向前 / 向后移动 1 帧")],
-        ["⇧ + ← / →", t("向前 / 向后移动 5 帧")],
+        ["Shift + ← / →", t("向前 / 向后移动 5 帧")],
         [t("悬停时间线"), t("预览所指帧，不移动播放头")],
         ["滚轮 / 捏合", t("以指针为锚缩放时间线")],
       ],
@@ -1345,14 +1411,18 @@ function showShortcuts() {
       title: t("剪辑"),
       items: [
         ["S", t("在播放头分割选中动画；未选动画时分割主片段")],
-        ["⌥ + 点击主片段", t("在点击处直接切分")],
-        ["⇧ / ⌘ 点击主片段", t("连续选择 / 增减选择主片段")],
+        ["Q", t("修剪选中片段起点到播放头；未选片段时波纹删除播放头之前的内容")],
+        ["W", t("修剪选中片段终点到播放头；未选片段时波纹删除播放头之后的内容")],
+        ["Alt + 点击主片段", t("在点击处直接切分")],
+        ["Shift / Ctrl 点击主片段", t("连续选择 / 增减选择主片段")],
+        [t("拖动主片段"), t("调整片段顺序")],
         ["Ctrl + C", t("复制片段")],
         ["Ctrl + V", t("粘贴片段")],
-        ["Ctrl + ⇧ + V", t("粘贴属性")],
-        ["⌥ + X", t("导出选中的主片段范围")],
+        ["Ctrl + Shift + V", t("粘贴属性")],
+        ["Alt + X", t("导出选中的主片段范围")],
+        [t("悬停剪切缝"), t("合并或还原被剪去的素材")],
         ["Delete", t("删除当前选中项")],
-        ["Ctrl + Z / ⇧ + Ctrl + Z", `${t("撤销")} / ${t("重做")}`],
+        ["Ctrl + Z / Ctrl + Shift + Z", `${t("撤销")} / ${t("重做")}`],
       ],
     },
     {
@@ -1370,6 +1440,8 @@ function showShortcuts() {
         ["Ctrl + O", t("打开项目")],
         ["Ctrl + E", t("导出成片")],
         ["Ctrl + J", t("快捷键")],
+        ["Alt + Ctrl + I", t("显示 / 隐藏检查器")],
+        ["Esc", t("取消裁切 / 停止拖动")],
       ],
     },
   ];
@@ -1489,7 +1561,10 @@ function parkMediaAt(time) {
   for (const role of ["screen", "camera"]) {
     const video = store.media[role];
     if (!video) continue;
-    const offset = role === "camera" ? doc?.media?.camera?.offset || 0 : 0;
+    const offset =
+      role === "camera"
+        ? (doc?.media?.camera?.offset || 0) + (doc?.camera?.syncOffset || 0)
+        : 0;
     try {
       video.currentTime = Math.max(0, sourceTime - offset);
     } catch {

@@ -1,7 +1,7 @@
 {
   "name": "dogsc-windows",
   "productName": "DogSC",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Windows port of DogSC — smooth screen capture and lightweight editing.",
   "main": "src/main/main.js",
   "author": "DogSC Windows Port",
@@ -10,7 +10,7 @@
     "start": "electron .",
     "dev": "electron . --dev",
     "dist": "electron-builder --win",
-    "test": "node tools/test-auto-zoom.mjs && node tools/test-pointer-smooth.mjs && node tools/test-save-state.mjs && node tools/test-media-exchange.mjs && node tools/test-cursor-shapes.mjs",
+    "test": "node tools/test-auto-zoom.mjs && node tools/test-pointer-smooth.mjs && node tools/test-save-state.mjs && node tools/test-media-exchange.mjs && node tools/test-cursor-shapes.mjs && node tools/test-project-io.mjs && node tools/test-recovery.mjs",
     "icon": "node tools/make-icon.js",
     "demo": "node tools/make-demo-project.js"
   },

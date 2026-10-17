@@ -5,6 +5,8 @@
  *
  *   MyCapture.dogscproject/
  *     project.json          authored document (schema v27 compatible)
+ *     project.previous.json last known-good revision (two-stage commit)
+ *     events/pointer.jsonl  pointer track (samples + clicks, one per line)
  *     media/                screen, camera, audio, background, stickers
  *
  * Media is always addressed project-relatively in project.json so a package
@@ -14,6 +16,7 @@
 const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
+const { randomUUID } = require("crypto");
 
 const PACKAGE_EXTENSION = ".dogscproject";
 const SCHEMA_VERSION = 27;
@@ -46,13 +49,82 @@ async function uniquePackagePath(parentDir, baseName) {
 /* Writing                                                                   */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * Extends a path past the legacy 260-character MAX_PATH limit with the
+ * Windows extended-length prefix. A `.dogscproject` under a long user
+ * directory (deep profile paths, long Chinese recording names) can cross the
+ * limit; Node's fs accepts the prefix natively. Electron's shell.trashItem
+ * does not, so discard stays unprefixed and keeps reporting failures.
+ */
+function withLongPath(value) {
+  if (typeof value !== "string" || !path.isAbsolute(value) || value.startsWith("\\\\?\\")) {
+    return value;
+  }
+  if (value.length < 248) return value;
+  if (value.startsWith("\\\\")) return `\\\\?\\UNC\\${value.slice(2)}`;
+  return `\\\\?\\${value}`;
+}
+
+/**
+ * Writes `content` to `target` through a uniquely named temp file and an
+ * atomic rename. The unique suffix keeps concurrent saves (autosave racing a
+ * manual save) from colliding on one staging file.
+ */
+async function atomicWrite(target, content) {
+  const tmp = withLongPath(`${target}.${randomUUID()}.tmp`);
+  await fsp.writeFile(tmp, content, "utf8");
+  await fsp.rename(tmp, withLongPath(target));
+  return target;
+}
+
+/**
+ * Publishes `project.json` with the original's two-stage commit
+ * (`ProjectStore.commitStagedProject`):
+ *
+ *  1. the outgoing document — but only if it still parses — is atomically
+ *     copied aside as `project.previous.json`, so a write that lands damaged
+ *     (disk full, antivirus quarantine, process killed mid-rename) can never
+ *     take the last known-good revision down with it;
+ *  2. a document written by an older schema is additionally kept as
+ *     `project-v<N>-before-migration.json`, matching the original's
+ *     pre-migration backup;
+ *  3. the new document is staged under a unique name and renamed into place.
+ */
 async function writeProjectJson(packagePath, document) {
   await fsp.mkdir(packagePath, { recursive: true });
   const target = path.join(packagePath, "project.json");
-  const tmp = `${target}.tmp`;
   const payload = { ...document, schemaVersion: SCHEMA_VERSION };
-  await fsp.writeFile(tmp, JSON.stringify(payload, null, 2), "utf8");
-  await fsp.rename(tmp, target);
+
+  /* Stage 1 — preserve the outgoing revision while it is still readable. A
+     damaged file is not worth keeping: backing it up would only let a later
+     fallback restore the damage. */
+  let outgoing = null;
+  try {
+    outgoing = await fsp.readFile(target, "utf8");
+  } catch {
+    /* First write for this package — nothing to preserve. */
+  }
+  if (outgoing !== null) {
+    let parsed = null;
+    try {
+      parsed = JSON.parse(outgoing);
+    } catch {
+      parsed = null;
+    }
+    if (parsed) {
+      await atomicWrite(path.join(packagePath, "project.previous.json"), outgoing);
+      const outgoingVersion = Number(parsed.schemaVersion);
+      if (Number.isFinite(outgoingVersion) && outgoingVersion < SCHEMA_VERSION) {
+        await atomicWrite(
+          path.join(packagePath, `project-v${outgoingVersion}-before-migration.json`),
+          outgoing
+        );
+      }
+    }
+  }
+
+  /* Stage 2 — publish. */
+  await atomicWrite(target, JSON.stringify(payload, null, 2));
   return target;
 }
 
@@ -61,19 +133,19 @@ async function writeProjectJson(packagePath, document) {
  * `role` names the file inside media/ (screen, camera, system, microphone).
  */
 async function adoptMedia(packagePath, sourcePath, role) {
-  const mediaDir = path.join(packagePath, "media");
+  const mediaDir = withLongPath(path.join(packagePath, "media"));
   await fsp.mkdir(mediaDir, { recursive: true });
   const ext = path.extname(sourcePath) || ".bin";
   const relative = path.join("media", `${role}${ext}`).split(path.sep).join("/");
-  const destination = path.join(packagePath, relative);
-  await fsp.copyFile(sourcePath, destination);
+  const destination = withLongPath(path.join(packagePath, relative));
+  await fsp.copyFile(withLongPath(sourcePath), destination);
   return relative;
 }
 
 async function adoptMediaAs(packagePath, sourcePath, relativePath) {
-  const destination = path.join(packagePath, relativePath);
-  await fsp.mkdir(path.dirname(destination), { recursive: true });
-  await fsp.copyFile(sourcePath, destination);
+  const destination = withLongPath(path.join(packagePath, relativePath));
+  await fsp.mkdir(withLongPath(path.dirname(destination)), { recursive: true });
+  await fsp.copyFile(withLongPath(sourcePath), destination);
   return relativePath.split(path.sep).join("/");
 }
 
@@ -87,16 +159,149 @@ async function readProjectJson(packagePath) {
   return JSON.parse(raw);
 }
 
+/**
+ * Opens a project package, with the original's revision guarantees:
+ *
+ *  - a `project.json` from a *future* schema is refused outright — never
+ *    silently downgraded and never recovered from `previous.json`, because
+ *    overwriting unknown future fields is exactly how data gets lost
+ *    (`ProjectValidator.unsupportedFutureVersion`);
+ *  - a `project.json` that fails to parse falls back to the last known-good
+ *    `project.previous.json`, flagged so the UI can tell the user.
+ */
 async function readProject(packagePath) {
-  const document = await readProjectJson(packagePath);
-  return { packagePath, document };
+  let document = null;
+  let recoveredFromPreviousRevision = false;
+  try {
+    document = await readProjectJson(packagePath);
+  } catch (error) {
+    let previous = null;
+    try {
+      previous = JSON.parse(
+        await fsp.readFile(path.join(packagePath, "project.previous.json"), "utf8")
+      );
+    } catch {
+      previous = null;
+    }
+    if (!previous) throw error;
+    document = previous;
+    recoveredFromPreviousRevision = true;
+  }
+
+  const version = Number(document?.schemaVersion);
+  if (Number.isFinite(version) && version > SCHEMA_VERSION) {
+    const error = new Error(
+      `project schema v${version} is newer than the supported v${SCHEMA_VERSION}`
+    );
+    error.code = "unsupportedFutureVersion";
+    error.schemaVersion = version;
+    throw error;
+  }
+  return { packagePath, document, recoveredFromPreviousRevision };
 }
 
 /** Resolves a project-relative media path to an absolute one. */
 function resolveMedia(packagePath, relative) {
-  if (!relative) return null;
-  const absolute = path.join(packagePath, relative);
-  return fs.existsSync(absolute) ? absolute : null;
+  const absolute = resolveInsidePackage(packagePath, relative);
+  return absolute && fs.existsSync(absolute) ? absolute : null;
+}
+
+/**
+ * Resolves a package-relative path the way the original's
+ * `ProjectModel.resolve(relativePath:)` does: absolute paths and `..`
+ * segments are refused, and the result must stay inside the package. This is
+ * the guard that keeps a hostile `project.json` from pointing media at
+ * arbitrary files on disk.
+ */
+function resolveInsidePackage(packagePath, relative) {
+  if (typeof relative !== "string" || !relative.trim()) return null;
+  if (path.isAbsolute(relative) || /^[a-zA-Z]:/.test(relative)) return null;
+  const normalized = path.posix.normalize(relative.split(path.sep).join("/"));
+  if (!normalized || normalized === "." || normalized.startsWith("..")) return null;
+  const absolute = path.join(packagePath, normalized);
+  const packageRoot = path.resolve(packagePath) + path.sep;
+  if (!path.resolve(absolute).startsWith(packageRoot)) return null;
+  return absolute;
+}
+
+const POINTER_JOURNAL_RELATIVE = "events/pointer.jsonl";
+
+/**
+ * Writes the pointer track as `events/pointer.jsonl` — the same durable
+ * journal the original keeps, and the format crash recovery reads back.
+ * Samples are `{t,x,y,cursor?}` lines; clicks are lines with `click: true`.
+ */
+async function writePointerJournal(packagePath, samples, clicks) {
+  const lines = [];
+  for (const sample of Array.isArray(samples) ? samples : []) {
+    lines.push(
+      JSON.stringify({
+        t: q(sample.t, 4),
+        x: q(sample.x, 5),
+        y: q(sample.y, 5),
+        ...(sample.cursor ? { cursor: sample.cursor } : {}),
+      })
+    );
+  }
+  for (const click of Array.isArray(clicks) ? clicks : []) {
+    lines.push(
+      JSON.stringify({
+        t: q(click.t, 4),
+        x: q(click.x, 5),
+        y: q(click.y, 5),
+        button: click.button ?? 0,
+        delta: click.delta || 0,
+        click: true,
+      })
+    );
+  }
+  const target = path.join(packagePath, "events", "pointer.jsonl");
+  await fsp.mkdir(withLongPath(path.dirname(target)), { recursive: true });
+  await atomicWrite(target, lines.length ? lines.join("\n") + "\n" : "");
+  return POINTER_JOURNAL_RELATIVE;
+}
+
+/** Reads a package's pointer journal back into `{ samples, clicks }`. */
+async function readPointerJournal(packagePath, relative = POINTER_JOURNAL_RELATIVE) {
+  const target = resolveInsidePackage(packagePath, relative) ||
+    path.join(packagePath, POINTER_JOURNAL_RELATIVE);
+  const raw = await fsp.readFile(withLongPath(target), "utf8");
+  const samples = [];
+  const clicks = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!entry || !Number.isFinite(entry.t)) continue;
+    if (entry.click) {
+      clicks.push({
+        t: entry.t,
+        x: entry.x ?? 0.5,
+        y: entry.y ?? 0.5,
+        button: entry.button ?? 0,
+        delta: entry.delta || 0,
+      });
+    } else {
+      samples.push({
+        t: entry.t,
+        x: entry.x ?? 0.5,
+        y: entry.y ?? 0.5,
+        ...(entry.cursor ? { cursor: entry.cursor } : {}),
+      });
+    }
+  }
+  return { samples, clicks };
+}
+
+/** Quantises a number for the journal; keeps the JSONL compact and stable. */
+function q(value, digits) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Number(number.toFixed(digits));
 }
 
 /** Directory listing of openable projects, newest first. */
@@ -199,6 +404,10 @@ module.exports = {
   readProjectJson,
   readProject,
   resolveMedia,
+  resolveInsidePackage,
+  withLongPath,
+  writePointerJournal,
+  readPointerJournal,
   listProjects,
   discardProject,
 };

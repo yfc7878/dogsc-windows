@@ -12,7 +12,22 @@
     <title>首次使用引导</title>
   </head>
   <body>
-    <div class="intro">
+    <div class="intro" id="intro">
+      <!-- Brand intro: the original opens with a light-field animation
+           (glow / focus / wordmark / subtitle) before the guide itself.
+           Skippable with Esc or a click. -->
+      <div class="brand" id="brand">
+        <div class="brand-glow"></div>
+        <div class="brand-body">
+          <div class="brand-logo">D</div>
+          <div class="brand-word" aria-label="DogSC">
+            <span>D</span><span>o</span><span>g</span><span>S</span><span>C</span>
+          </div>
+          <p class="brand-sub">丝滑录屏</p>
+          <p class="brand-skip-hint">按 Esc 或点击跳过</p>
+        </div>
+      </div>
+
       <div class="glow"></div>
       <div class="intro-body">
         <div class="logo">D</div>

@@ -95,6 +95,7 @@ contextBridge.exposeInMainWorld("dogsc", {
   },
   capture: {
     displays: () => invoke("capture:displays"),
+    encoder: () => invoke("capture:encoder"),
     sources: (options) => invoke("capture:sources", options),
     start: (config) => invoke("capture:start", config),
     pause: () => invoke("capture:pause"),
@@ -128,6 +129,7 @@ contextBridge.exposeInMainWorld("dogsc", {
     replaceCamera: (payload) => invoke("project:replace-camera", payload),
     exportSources: (payload) => invoke("project:export-sources", payload),
     mediaUrl: (payload) => invoke("project:media-url", payload),
+    pointerSamples: (payload) => invoke("project:pointer-samples", payload),
     tempPath: (name) => invoke("project:temp-path", name),
   },
 

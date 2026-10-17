@@ -21,6 +21,7 @@ import {
 } from "../shared/widgets.js";
 import { renderFrame, resolveCanvasSize } from "../editor/js/frame-renderer.js";
 import { loadCursorAssets } from "../shared/cursor-assets.js";
+import { playChime } from "../shared/sound.js";
 import {
   clipDuration,
   normalizeDocument,
@@ -46,6 +47,25 @@ const FPS = [
   { value: 30, label: "30 FPS", note: "更小体积" },
   { value: 60, label: "60 FPS", note: "更流畅" },
 ];
+
+/**
+ * Final codec choice. H.264 is the default (plays everywhere); HEVC and
+ * ProRes 422 appear only when the toolchain can deliver them — HEVC via
+ * WebCodecs hardware encoders or ffmpeg's libx265, ProRes via ffmpeg's
+ * prores_ks. The original auto-switches past 4096 px to HEVC; here the
+ * switch happens at export time with a note instead of silently.
+ */
+const ENCODERS = [
+  { value: "h264", label: "H.264", note: "通用性最好" },
+  { value: "hevc", label: "HEVC", note: "同画质体积更小（MP4）" },
+  { value: "prores", label: "ProRes 422", note: "剪辑中间格式（MOV）" },
+];
+
+/* HEVC WebCodecs candidates, highest level first so 4K60 picks a profile
+   that can carry it. Chromium only exposes HEVC encoding where the GPU
+   driver provides one; everywhere else the H.264 pass becomes the
+   intermediate that ffmpeg transcodes. */
+const HEVC_CANDIDATES = ["hev1.1.6.L153.90", "hev1.1.6.L120.90", "hev1.1.6.L93.B0"];
 
 /**
  * Only H.264 is requested for the bitstream path.
@@ -78,13 +98,18 @@ const state = {
   content: "video",
   resolution: "1080p",
   fps: 60,
+  /* Final codec: "h264" | "hevc" | "prores" (ENCODERS). */
+  encoder: "h264",
+  /* Probed from the main process: which extra codecs ffmpeg can deliver. */
+  encoderCaps: { hevc: false, prores: false },
   outputPath: null,
   folder: null,
   baseName: "DogSC 导出",
   exporting: false,
   cancelled: false,
   startedAt: 0,
-  encoder: null,
+  /* The live WebCodecs encoder while a bitstream pass runs. */
+  activeEncoder: null,
   mode: "bitstream",
   codec: null,
 };
@@ -111,6 +136,18 @@ async function boot() {
 
   const prefs = await api.prefs.all();
   state.folder = prefs.exportLocation;
+  state.alertSounds = prefs.alertSounds !== false;
+
+  /* Which final codecs this ffmpeg build can deliver — HEVC and ProRes
+     options are hidden when the encoder is missing. */
+  state.encoderCaps = await api.exporter.capabilities().catch(() => ({ hevc: false, prores: false }));
+
+  /* The Settings toggle can flip while this sheet is open. */
+  api.on("app:prefs", (payload) => {
+    if (payload && typeof payload.alertSounds === "boolean") {
+      state.alertSounds = payload.alertSounds;
+    }
+  });
 
   api.on("export:init", (payload) => init(payload));
   api.on("export:progress", (payload) => updateProgress(payload));
@@ -389,10 +426,42 @@ function buildChoices() {
     fpsHost.appendChild(button);
   }
 
+  /* Codec choice — options the ffmpeg build cannot deliver stay hidden, and
+     the row itself disappears for audio-only exports. */
+  const encoderHost = document.getElementById("encoder-choices");
+  encoderHost.innerHTML = "";
+  for (const option of ENCODERS) {
+    const available =
+      option.value === "h264" ||
+      (option.value === "hevc" && Boolean(state.encoderCaps?.hevc)) ||
+      (option.value === "prores" && Boolean(state.encoderCaps?.prores));
+    if (!available) continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "choice";
+    if (state.encoder === option.value) button.classList.add("is-selected");
+    button.innerHTML = `<span>${option.label}</span>${
+      state.encoder === option.value ? icon("check", 13) : ""
+    }`;
+    attachTooltip(button, option.note);
+    button.addEventListener("click", () => {
+      state.encoder = option.value;
+      buildChoices();
+      updateSpecs();
+      estimate();
+    });
+    encoderHost.appendChild(button);
+  }
+
   const isAudio = state.content === "audio";
   document.getElementById("block-resolution").hidden = isAudio;
+  document.getElementById("block-encoder").hidden = isAudio;
   document.getElementById("block-fps").hidden = isAudio;
-  document.getElementById("file-ext").textContent = isAudio ? ".m4a" : ".mp4";
+  document.getElementById("file-ext").textContent = isAudio
+    ? ".m4a"
+    : state.encoder === "prores"
+      ? ".mov"
+      : ".mp4";
   document.getElementById("spec-format").textContent = isAudio ? "M4A" : "MP4";
   document.getElementById("btn-start").textContent = isAudio
     ? t("开始导出音频")
@@ -410,6 +479,8 @@ function updateSpecs() {
   document.getElementById("spec-duration").textContent = formatDuration(
     timelineDuration(state.document)
   );
+  document.getElementById("spec-format").textContent =
+    state.content === "audio" ? "M4A" : state.encoder === "prores" ? "MOV" : "MP4";
   if (state.range) {
     document.getElementById("sheet-sub").textContent = t(
       "%d 个片段，从 %@ 到 %@",
@@ -432,8 +503,12 @@ function estimate() {
   }
   const size = targetSize();
   const pixels = size.width * size.height;
-  /* Rough H.264 budget: ~0.10 bits per pixel per frame at the default quality. */
-  const bytesPerSecond = (pixels * state.fps * 0.1) / 8;
+  /* Rough budgets at the default quality: H.264 ~0.10 bits per pixel per
+     frame, HEVC lands the same picture at ~0.07, ProRes 422 is an editing
+     intermediate and barely compresses at all. */
+  const bitsPerPixel =
+    state.encoder === "prores" ? 0.9 : state.encoder === "hevc" ? 0.07 : 0.1;
+  const bytesPerSecond = (pixels * state.fps * bitsPerPixel) / 8;
   document.getElementById("estimate").textContent = t(
     "预计大小 · 约 %@",
     formatBytes(bytesPerSecond * duration)
@@ -485,7 +560,8 @@ async function renderPreview() {
 
 async function seekAll(time) {
   const sourceTime = sourceTimeAt(state.document, time);
-  const cameraOffset = state.document.media?.camera?.offset || 0;
+  const cameraOffset =
+    (state.document.media?.camera?.offset || 0) + (state.document.camera?.syncOffset || 0);
   const videos = Object.values(state.media).filter(Boolean);
   /* A background video is part of the picture and has to follow the playhead
      just like the recorded media. */
@@ -542,7 +618,7 @@ async function start() {
     return;
   }
 
-  const extension = state.content === "audio" ? "m4a" : "mp4";
+  const extension = state.content === "audio" ? "m4a" : state.encoder === "prores" ? "mov" : "mp4";
   state.outputPath = `${state.folder}\\${name}.${extension}`;
 
   /* Cursor sprites are needed before the first composited frame. */
@@ -578,7 +654,15 @@ async function start() {
     if (!Number.isFinite(duration) || duration <= 0) {
       throw new Error(t("时间线时长无效，请关闭导出窗口后重试"));
     }
-    const codec = await pickCodec(size, state.fps);
+    /* The original's DirectExportPipeline switches past 4096 px to HEVC —
+       H.264 levels simply do not cover those sizes. Mirror that as an
+       automatic, annotated switch instead of a failed encode. */
+    let encoder = state.encoder;
+    if (encoder === "h264" && size.width > 4096 && state.encoderCaps?.hevc) {
+      encoder = "hevc";
+      toast(t("超过 4096 像素，已自动改用 HEVC 编码"), { icon: "info", duration: 4200 });
+    }
+    const codec = await pickCodec(size, state.fps, encoder);
     state.codec = codec;
 
     const begin = await api.exporter.begin({
@@ -587,6 +671,7 @@ async function start() {
       fps: state.fps,
       duration,
       mode: codec ? "bitstream" : "frames",
+      encoder,
     });
     if (!begin?.ok) throw new Error(begin?.reason || "begin-failed");
 
@@ -625,9 +710,38 @@ async function start() {
   }
 }
 
-async function pickCodec(size, fps) {
+async function pickCodec(size, fps, encoder = "h264") {
   if (typeof VideoEncoder === "undefined") return null;
-  const bitrate = Math.round(size.width * size.height * fps * 0.1);
+  const baseBitrate = Math.round(size.width * size.height * fps * 0.1);
+  if (encoder === "hevc") {
+    /* Hardware HEVC goes straight into the bitstream: one generation, no
+       transcode, at ~70% of the H.264 budget for the same picture. */
+    for (const codec of HEVC_CANDIDATES) {
+      try {
+        const support = await VideoEncoder.isConfigSupported({
+          codec,
+          width: size.width,
+          height: size.height,
+          bitrate: Math.round(baseBitrate * 0.7),
+          framerate: fps,
+        });
+        if (support?.supported) {
+          return {
+            codec,
+            bitrate: Math.round(baseBitrate * 0.7),
+            hardwareAcceleration: "no-preference",
+            family: "hevc",
+          };
+        }
+      } catch {
+        /* try the next candidate */
+      }
+    }
+    /* No WebCodecs HEVC on this machine: the H.264 pass below becomes the
+       intermediate that ffmpeg transcodes via libx265, so it gets extra
+       bitrate headroom to keep the second generation clean. */
+  }
+  const bitrate = encoder === "h264" ? baseBitrate : Math.round(baseBitrate * 1.5);
   for (const codec of CODEC_CANDIDATES) {
     try {
       const support = await VideoEncoder.isConfigSupported({
@@ -637,7 +751,9 @@ async function pickCodec(size, fps) {
         bitrate,
         framerate: fps,
       });
-      if (support?.supported) return { codec, bitrate, hardwareAcceleration: "no-preference" };
+      if (support?.supported) {
+        return { codec, bitrate, hardwareAcceleration: "no-preference", family: "h264" };
+      }
     } catch {
       /* try the next candidate */
     }
@@ -708,7 +824,7 @@ async function encodeBitstreamPass({ size, duration, codec, hardwareAcceleration
       console.error("[export] encoder error", error);
     },
   });
-  encoder.configure({
+  const config = {
     codec: codec.codec,
     width: size.width,
     height: size.height,
@@ -716,11 +832,13 @@ async function encodeBitstreamPass({ size, duration, codec, hardwareAcceleration
     framerate: state.fps,
     latencyMode: "quality",
     hardwareAcceleration,
-    /* ffmpeg's `h264` demuxer expects Annex B start codes, not the AVCC
-       length-prefixed framing Chromium produces by default. */
-    avc: { format: "annexb" },
-  });
-  state.encoder = encoder;
+  };
+  /* ffmpeg's `h264` demuxer expects Annex B start codes, not the AVCC
+     length-prefixed framing Chromium produces by default. HEVC output is
+     Annex B already, so the framing hint is AVC-only. */
+  if (codec.family !== "hevc") config.avc = { format: "annexb" };
+  encoder.configure(config);
+  state.activeEncoder = encoder;
 
   try {
     for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
@@ -775,7 +893,7 @@ async function encodeBitstreamPass({ size, duration, codec, hardwareAcceleration
     } catch {
       /* already closed */
     }
-    state.encoder = null;
+    state.activeEncoder = null;
   }
   return { frames, bytes, error: encoderError };
 }
@@ -894,6 +1012,8 @@ function finishSuccess(result) {
   cancelButton.textContent = t("关闭");
   document.getElementById("estimate").textContent = `${t("导出完成")} · ${formatBytes(result.size || 0)}`;
   toast(`${t("导出完成")} · ${result.outputPath}`, { icon: "check", duration: 4200 });
+  /* The original's NSSound "Glass" cue; synthesised here (see sound.js). */
+  if (state.alertSounds !== false) playChime();
 }
 
 function setBusy(busy) {

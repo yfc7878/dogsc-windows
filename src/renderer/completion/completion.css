@@ -73,6 +73,33 @@ body {
   color: var(--secondary-text);
 }
 
+.movie-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 22px 0;
+  padding: 9px 10px 9px 12px;
+  border-radius: 10px;
+  background: var(--group-surface);
+  border: 0.75px solid var(--hairline);
+}
+
+.movie-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--secondary-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.movie-note .btn {
+  flex: none;
+}
+
 .sheet-actions {
   display: flex;
   align-items: center;

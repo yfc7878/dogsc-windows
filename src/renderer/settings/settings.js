@@ -7,6 +7,7 @@
 import { icon } from "../shared/icons.js";
 import { setLocale, t } from "../shared/i18n.js";
 import { attachTooltip, choiceGroup, enableManualDrag, switchRow, toast } from "../shared/widgets.js";
+import { playChime } from "../shared/sound.js";
 
 const api = window.dogsc;
 
@@ -22,13 +23,15 @@ const SECTIONS = [
   { id: "about", label: "关于 DogSC", icon: "sparkles" },
 ];
 
-const state = { section: "general", prefs: {}, permissions: {}, version: "" };
+const state = { section: "general", prefs: {}, permissions: {}, version: "", encoder: null };
 
 async function boot() {
   setLocale("zh-Hans");
   state.prefs = await api.prefs.all();
   state.permissions = await api.app.permissions();
   state.version = await api.app.version();
+  /* Probed once at open; the label is stable per machine. */
+  state.encoder = await api.capture.encoder().catch(() => null);
 
   const theme = await api.app.theme();
   document.documentElement.dataset.theme = theme.dark ? "dark" : "light";
@@ -122,8 +125,8 @@ function renderGeneral(body) {
   preview.appendChild(
     choiceGroup(
       [
-        { value: "smooth", label: t("播放更流畅") },
         { value: "full", label: t("清晰预览") },
+        { value: "smooth", label: t("播放更流畅") },
       ],
       state.prefs.previewQuality,
       async (value) => {
@@ -134,13 +137,28 @@ function renderGeneral(body) {
   );
   const hint = document.createElement("p");
   hint.className = "card-hint";
-  hint.textContent = t("清晰预览更流畅，完整分辨率保留细节；导出画质不受影响。");
+  hint.textContent = t("「清晰预览」按完整分辨率渲染预览画面；「播放更流畅」降低预览渲染分辨率，大型项目编辑更顺滑。导出画质不受影响。");
   preview.appendChild(hint);
   preview.appendChild(
     switchRow(t("仅在成功导出后播放"), state.prefs.playAfterExport, async (value) => {
       state.prefs = await api.prefs.set("playAfterExport", value);
     })
   );
+  const soundRow = document.createElement("div");
+  soundRow.className = "path-row";
+  soundRow.appendChild(
+    switchRow(t("导出完成提示音"), state.prefs.alertSounds !== false, async (value) => {
+      state.prefs = await api.prefs.set("alertSounds", value);
+      render();
+    })
+  );
+  const audition = document.createElement("button");
+  audition.type = "button";
+  audition.className = "btn";
+  audition.innerHTML = `${icon("speaker", 15)}<span>${t("试听")}</span>`;
+  audition.addEventListener("click", () => playChime());
+  soundRow.appendChild(audition);
+  preview.appendChild(soundRow);
   body.appendChild(preview);
 
   const windowCard = card(t("窗口与界面状态"), t("清除系统记住的窗口位置、尺寸和全屏记忆状态。"));
@@ -159,6 +177,21 @@ function renderGeneral(body) {
   });
   resetRow.appendChild(reset);
   windowCard.appendChild(resetRow);
+
+  /* The original's "重新开始引导" — replays the first-use guide. */
+  const guideRow = document.createElement("div");
+  guideRow.className = "path-row";
+  const guide = document.createElement("button");
+  guide.type = "button";
+  guide.className = "btn";
+  guide.innerHTML = `${icon("sparkles", 15)}<span>${t("重新开始引导")}</span>`;
+  guide.addEventListener("click", async () => {
+    await api.prefs.set("onboardingCompleted", false);
+    api.windows.openOnboarding();
+    window.close();
+  });
+  guideRow.appendChild(guide);
+  windowCard.appendChild(guideRow);
   body.appendChild(windowCard);
 }
 
@@ -238,6 +271,16 @@ function renderRecording(body) {
       state.prefs = await api.prefs.set("showFloatingCameraPreview", value);
     })
   );
+  const cameraPreviewHint = document.createElement("p");
+  cameraPreviewHint.className = "card-hint";
+  cameraPreviewHint.textContent = t("录制窗口时，在屏幕右下角显示一个摄像头小窗，便于随时确认构图；录制显示器或区域时 Windows 无法把应用自有窗口排除在画面之外，与原版“预览不入画”的行为保持一致，此时不显示。");
+  card1.appendChild(cameraPreviewHint);
+  const encoderHint = document.createElement("p");
+  encoderHint.className = "card-hint";
+  encoderHint.textContent = state.encoder?.ok
+    ? t("屏幕采集编码器：%@（自动选择）", state.encoder.label)
+    : t("屏幕采集编码器：当前不可用，录制时将自动改用备用采集方式。");
+  card1.appendChild(encoderHint);
   body.appendChild(card1);
 
   const card2 = card(t("录制画面中隐藏桌面图标"), t("隐藏桌面文件"));
@@ -380,33 +423,25 @@ function renderAbout(body) {
   updateHint.className = "card-hint";
   updateHint.style.flex = "1";
   updateHint.style.margin = "0";
-  updateHint.textContent = state.prefs.autoCheckUpdates
-    ? t("每天自动检查 GitHub Release；发现新版后可直接下载、替换并重新打开。")
-    : t("自动检查已关闭；仍可随时手动检查并直接安装新版。");
+  updateHint.textContent = t("移植版未接入自动更新；点击「检查更新」会打开 Releases 页面，可手动下载最新版本。");
   const check = document.createElement("button");
   check.type = "button";
   check.className = "btn";
   check.innerHTML = `${icon("refresh", 15)}<span>${t("检查更新")}</span>`;
-  check.addEventListener("click", async () => {
-    const result = await api.app.checkUpdates();
-    toast(result.status === "current" ? t("当前已是最新版本") : t("软件更新"), { icon: "check" });
-  });
+  check.addEventListener("click", () =>
+    api.app.openExternal("https://github.com/yfc7878/dogsc-windows/releases/latest")
+  );
   updateRow.append(updateHint, check);
   card1.appendChild(updateRow);
-  card1.appendChild(
-    switchRow(t("软件更新"), state.prefs.autoCheckUpdates, async (value) => {
-      state.prefs = await api.prefs.set("autoCheckUpdates", value);
-      render();
-    })
-  );
   body.appendChild(card1);
 
   const card2 = card(t("免费开源 · 自愿支持"), t("请杯咖啡"));
   const links = document.createElement("div");
   links.className = "path-row";
   for (const [label, url] of [
-    [t("查看源码"), "https://github.com/laogou717/dogsc"],
-    [t("反馈建议"), "https://github.com/laogou717/dogsc/issues"],
+    [t("移植版源码"), "https://github.com/yfc7878/dogsc-windows"],
+    [t("反馈建议"), "https://github.com/yfc7878/dogsc-windows/issues"],
+    [t("macOS 原版"), "https://github.com/laogou717/dogsc"],
   ]) {
     const button = document.createElement("button");
     button.type = "button";

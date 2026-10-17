@@ -26,6 +26,9 @@ const SIZES = {
   recorder: { width: 812, height: 698 },
   recorderExpanded: { width: 812, height: 698 },
   memo: { width: 336, height: 420 },
+  /* The original's CameraPreviewWindow: a 240pt bubble (288 long edge for the
+     aspect-ratio shape), excluded from the capture. */
+  floatingCamera: { width: 268, height: 268 },
   editor: { width: 1180, height: 780 },
   exportPanel: { width: 900, height: 664 },
   settings: { width: 760, height: 580 },
@@ -266,6 +269,72 @@ class WindowManager {
   }
 
   /* --------------------------------------------------------------------- */
+  /* Floating camera preview                                               */
+  /* --------------------------------------------------------------------- */
+
+  /**
+   * The port of the original's `CameraPreviewWindowController`: a small
+   * always-on-top bubble that shows the camera feed while recording, so the
+   * user can check framing without opening the editor.
+   *
+   * It is only opened for window recordings on purpose. macOS keeps the
+   * original's preview out of the picture with `sharingType = .readOnly`;
+   * Windows has no equivalent for a full-display capture (ddagrab records
+   * everything on screen, the app's own windows included), so on display and
+   * area sources the preview stays hidden rather than burning itself into the
+   * recording. Window capture is per-window, so there the bubble is naturally
+   * excluded — matching the original's behaviour.
+   */
+  createFloatingCamera({ deviceId, mirrored } = {}) {
+    const existing = this.get("floatingCamera");
+    if (existing) {
+      existing.webContents.send("floating-camera:config", {
+        deviceId: deviceId || "",
+        mirrored: mirrored !== false,
+      });
+      return existing;
+    }
+    const size = SIZES.floatingCamera;
+    const saved = this.prefs.get("floatingCameraBounds");
+    const area = saved || defaultFloatingCameraBounds(size);
+    const win = new BrowserWindow(
+      this.baseOptions({
+        width: size.width,
+        height: size.height,
+        x: area.x,
+        y: area.y,
+        backgroundColor: "#00000000",
+        frame: false,
+        transparent: true,
+        resizable: false,
+        movable: true,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        hasShadow: false,
+        maximizable: false,
+        minimizable: false,
+        fullscreenable: false,
+      })
+    );
+    win.setAlwaysOnTop(true, "floating");
+    this.load(win, "floatingCamera", "floating-camera", {
+      deviceId: deviceId || "",
+      mirrored: mirrored === false ? "0" : "1",
+    });
+    win.once("ready-to-show", () => win.showInactive());
+    const remember = () => {
+      if (!win.isDestroyed()) this.prefs.set("floatingCameraBounds", win.getBounds());
+    };
+    win.on("moved", remember);
+    return this.track("floatingCamera", win);
+  }
+
+  closeFloatingCamera() {
+    const existing = this.get("floatingCamera");
+    if (existing) existing.close();
+  }
+
+  /* --------------------------------------------------------------------- */
   /* Editor                                                                */
   /* --------------------------------------------------------------------- */
 
@@ -423,6 +492,15 @@ function defaultRecorderBounds(size) {
   return {
     x: Math.round(x + (width - size.width) / 2),
     y: Math.round(y + height - size.height - 48),
+  };
+}
+
+function defaultFloatingCameraBounds(size) {
+  const display = screen.getPrimaryDisplay();
+  const { x, y, width, height } = display.workArea;
+  return {
+    x: Math.round(x + width - size.width - 24),
+    y: Math.round(y + height - size.height - 24),
   };
 }
 

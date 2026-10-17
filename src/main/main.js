@@ -44,6 +44,8 @@ const mediaExchange = require("./media-exchange");
 const cursorAssets = require("./cursor-assets");
 const screenCapture = require("./screen-capture");
 const desktopIcons = require("./desktop-icons");
+const recovery = require("./recovery");
+const { mergeCursorShapes } = require("./pointer-shapes");
 
 const RESOURCES = path.join(__dirname, "..", "..", "resources");
 const RENDERER_DIR = path.join(__dirname, "..", "renderer");
@@ -321,6 +323,9 @@ app.whenReady().then(async () => {
     windows.createRecorder();
   }
   pointer.start().catch(() => {});
+  /* Picks up takes that were interrupted by a crash; runs in the background
+     so the first window is never blocked by remuxing. */
+  void recoverInterruptedSessions();
 });
 
 app.on("window-all-closed", () => {
@@ -434,6 +439,25 @@ function registerIpc() {
   });
 
   /* ---- Capture sources ---- */
+
+  /**
+   * The screen-capture encoder this machine would use, probed the same way
+   * the recording path probes it. Shown in Settings so the choice is visible
+   * instead of silent (the original exposes its codec picker; the port picks
+   * automatically and reports the result here).
+   */
+  ipcMain.handle("capture:encoder", async () => {
+    try {
+      if (!(await screenCapture.available())) {
+        return { ok: false, reason: "unavailable" };
+      }
+      const encoder = await screenCapture.detectEncoder();
+      return { ok: true, label: encoder?.label || null, name: encoder?.name || null };
+    } catch (error) {
+      return { ok: false, reason: String(error?.message || error) };
+    }
+  });
+
   ipcMain.handle("capture:displays", () =>
     screen.getAllDisplays().map((display, index) => ({
       id: String(display.id),
@@ -514,6 +538,9 @@ function registerIpc() {
     await fsp.appendFile(target, Buffer.from(data));
     const written = (session.bytes ||= {});
     written[role] = (written[role] || 0) + data.byteLength;
+    /* Screen chunks arrive about once a second; that cadence is what the
+       frame-drop monitor measures. */
+    if (role === "screen") noteFrameProgress();
     return { ok: true };
   });
   ipcMain.handle("capture:write-file", async (_e, payload) => {
@@ -556,9 +583,30 @@ function registerIpc() {
     projectIO.listProjects(directory || prefs.get("projectLocation"))
   );
   ipcMain.handle("project:open", async (_e, packagePath) => {
-    const { document } = await projectIO.readProject(packagePath);
+    let opened;
+    try {
+      opened = await projectIO.readProject(packagePath);
+    } catch (error) {
+      if (error?.code === "unsupportedFutureVersion") {
+        /* A package written by a newer DogSC. Refuse it instead of silently
+           downgrading — overwriting unknown future fields is how data gets
+           lost. The original hard-fails future schemas for the same reason. */
+        return {
+          ok: false,
+          reason: "unsupported-future-version",
+          schemaVersion: error.schemaVersion ?? null,
+          supported: projectIO.SCHEMA_VERSION,
+        };
+      }
+      throw error;
+    }
     prefs.set("lastProjectPath", packagePath);
-    return { packagePath, document };
+    return {
+      ok: true,
+      packagePath,
+      document: opened.document,
+      recoveredFromPreviousRevision: opened.recoveredFromPreviousRevision === true,
+    };
   });
   /**
    * Picks an existing project package.
@@ -596,6 +644,15 @@ function registerIpc() {
     await projectIO.writeProjectJson(packagePath, document);
     prefs.set("lastProjectPath", packagePath);
     return { packagePath };
+  });
+  /* The editor hydrates the pointer track from `events/pointer.jsonl`; the
+     document itself only carries the reference. */
+  ipcMain.handle("project:pointer-samples", async (_e, payload) => {
+    try {
+      return await projectIO.readPointerJournal(payload?.packagePath, payload?.relative);
+    } catch {
+      return { samples: [], clicks: [] };
+    }
   });
   ipcMain.handle("project:discard", async (_e, packagePath) => {
     await projectIO.discardProject(shell, packagePath);
@@ -837,9 +894,11 @@ function registerIpc() {
     pendingPayloads.delete("completion");
     return payload;
   });
-  ipcMain.handle("export:capabilities", () => ({
+  ipcMain.handle("export:capabilities", async () => ({
     ffmpeg: exporter.ffmpegPath(),
     temp: tempDir(),
+    /* Which final codecs this ffmpeg build can actually deliver. */
+    ...(await exporter.detectEncoders()),
   }));
   ipcMain.handle("export:begin", (event, payload) => beginExport(payload, event.sender));
   ipcMain.handle("export:chunk", (_e, payload) => writeExportChunk(payload));
@@ -3365,6 +3424,220 @@ function sessionState() {
   };
 }
 
+/* ------------------------------------------------------------------------- */
+/* Recovery journal                                                          */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * Journals the running take so an interrupted recording can be rebuilt after
+ * a crash or a forced quit (the original's RecordingRecoveryJournal). The
+ * manifest and the pointer journal both live in the working directory — the
+ * package only exists once the take stops — and every write is best-effort:
+ * a journaling failure must never take the recording down.
+ */
+
+async function flushRecovery() {
+  const s = session;
+  if (!s || s.finishing) return;
+  const elapsed =
+    (Date.now() - s.startedAt - s.pausedTotal - (s.pausedAt ? Date.now() - s.pausedAt : 0)) / 1000;
+  await recovery.writeManifest(s.workingDir, {
+    state: s.paused ? "paused" : s.started ? "recording" : "preparing",
+    sessionId: path.basename(s.workingDir),
+    startedAt: s.startedAt,
+    appVersion: app.getVersion(),
+    config: s.config,
+    markers: s.markers,
+    pointer: s.pointerJournal
+      ? { originMs: pointer.originMs, delta: s.pointerJournal.delta }
+      : null,
+    media: mediaInventory(s.workingDir),
+    elapsed: Number(elapsed.toFixed(1)),
+  });
+  recovery.appendPerformance(s.workingDir, {
+    t: Number(elapsed.toFixed(1)),
+    bytes: recoveryBytes(s.workingDir),
+    dropped: dropMonitor.dropped,
+  });
+}
+
+/**
+ * Appends the pointer entries that arrived since the last flush, normalised
+ * against the recorded display and rebased onto the media time origin — the
+ * same math stopCapture() applies, just incremental, so a recovered track
+ * needs no second pass. Cursor shapes are merged from the full event list so
+ * the current shape is forward-filled correctly.
+ */
+function flushPointerJournal() {
+  const s = session;
+  if (!s || s.finishing || !s.pointerJournal) return;
+  const journal = s.pointerJournal;
+  const samples = pointer.samples.slice(journal.sampleIndex);
+  const clicks = pointer.clicks.slice(journal.clickIndex);
+  journal.sampleIndex = pointer.samples.length;
+  journal.clickIndex = pointer.clicks.length;
+  if (!samples.length && !clicks.length) return;
+  const originX = journal.rect?.x ?? 0;
+  const originY = journal.rect?.y ?? 0;
+  const width = journal.rect?.width || 1920;
+  const height = journal.rect?.height || 1080;
+  const delta = journal.delta || 0;
+  const entries = mergeCursorShapes(samples, pointer.shapeEvents).map((sample) => ({
+    t: Number((sample.t + delta).toFixed(4)),
+    x: Number(((sample.x - originX) / width).toFixed(5)),
+    y: Number(((sample.y - originY) / height).toFixed(5)),
+    ...(sample.cursor ? { cursor: sample.cursor } : {}),
+  }));
+  for (const click of clicks) {
+    entries.push({
+      t: Number((click.t + delta).toFixed(4)),
+      x: Number(((click.x - originX) / width).toFixed(5)),
+      y: Number(((click.y - originY) / height).toFixed(5)),
+      button: click.button ?? 0,
+      delta: click.delta || 0,
+      click: true,
+    });
+  }
+  recovery.appendPointerLines(s.workingDir, entries);
+}
+
+function mediaInventory(workingDir) {
+  const out = {};
+  for (const name of [
+    "screen.mp4",
+    "screen.webm",
+    "camera.webm",
+    "system.webm",
+    "microphone.webm",
+    "poster.png",
+  ]) {
+    try {
+      const file = path.join(workingDir, name);
+      if (fs.existsSync(file) && fs.statSync(file).size > 1024) out[name] = true;
+    } catch {
+      /* advisory only */
+    }
+  }
+  return out;
+}
+
+function recoveryBytes(workingDir) {
+  let total = 0;
+  try {
+    for (const name of fs.readdirSync(workingDir)) {
+      const file = path.join(workingDir, name);
+      if (fs.statSync(file).isFile()) total += fs.statSync(file).size;
+    }
+  } catch {
+    /* advisory only */
+  }
+  return total;
+}
+
+function stopRecoveryTimers() {
+  if (session?.recoveryTimer) clearInterval(session.recoveryTimer);
+  if (session?.pointerTimer) clearInterval(session.pointerTimer);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Frame-drop monitor                                                        */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * The original warns about dropped frames with a three-layer debounce: an
+ * immediate alert at ≥3 dropped frames or ≥5% of a window, and a clear only
+ * after several healthy windows in a row. The port watches arrival cadence
+ * instead of frame counters — Chromium chunks arrive about once a second,
+ * ffmpeg progress lines stream continuously, and a one-second tick covers a
+ * total stall — so both capture paths feed the same monitor. Paused
+ * recordings produce nothing by design and are skipped.
+ */
+
+const DROP_WINDOW_MS = 5000;
+const DROP_GAP_MS = 1800;
+const DROP_IMMEDIATE_COUNT = 3;
+const DROP_RATIO = 0.05;
+const DROP_HEALTHY_WINDOWS = 5;
+
+const dropMonitor = {
+  lastAt: 0,
+  dropped: 0,
+  windowStart: 0,
+  healthyWindows: 0,
+  active: false,
+};
+let dropTimer = null;
+let ffmpegFrameMark = 0;
+
+function resetDropMonitor() {
+  Object.assign(dropMonitor, {
+    lastAt: 0,
+    dropped: 0,
+    windowStart: 0,
+    healthyWindows: 0,
+    active: false,
+  });
+  ffmpegFrameMark = 0;
+}
+
+/** Records that picture progress arrived; a long gap counts as dropped frames. */
+function noteFrameProgress(now = Date.now()) {
+  if (!session || session.paused) return;
+  if (!dropMonitor.windowStart) {
+    dropMonitor.windowStart = now;
+    dropMonitor.lastAt = now;
+    return;
+  }
+  const gap = now - dropMonitor.lastAt;
+  dropMonitor.lastAt = now;
+  if (gap > DROP_GAP_MS) {
+    dropMonitor.dropped += Math.max(1, Math.round((gap - DROP_GAP_MS) / 1000) + 1);
+  }
+  if (now - dropMonitor.windowStart >= DROP_WINDOW_MS) {
+    evaluateDropWindow(now);
+  }
+}
+
+/** ffmpeg progress lines: note roughly every half second of encoded frames. */
+function noteFfmpegFrames(count) {
+  if (count - ffmpegFrameMark >= 30) {
+    ffmpegFrameMark = count;
+    noteFrameProgress();
+  }
+}
+
+function evaluateDropWindow(now) {
+  const elapsed = (now - dropMonitor.windowStart) / 1000;
+  const ratio = elapsed > 0 ? dropMonitor.dropped / elapsed : 0;
+  const bad = dropMonitor.dropped >= DROP_IMMEDIATE_COUNT || ratio >= DROP_RATIO;
+  if (bad) {
+    dropMonitor.healthyWindows = 0;
+    if (!dropMonitor.active) {
+      dropMonitor.active = true;
+      send("recorder", "recorder:warning", { message: "frame-drop" });
+    }
+  } else {
+    dropMonitor.healthyWindows += 1;
+    if (dropMonitor.active && dropMonitor.healthyWindows >= DROP_HEALTHY_WINDOWS) {
+      dropMonitor.active = false;
+      send("recorder", "recorder:warning", { message: "frame-drop-recovered" });
+    }
+  }
+  dropMonitor.dropped = 0;
+  dropMonitor.windowStart = now;
+}
+
+function startDropMonitor() {
+  stopDropMonitor();
+  resetDropMonitor();
+  dropTimer = setInterval(() => noteFrameProgress(), 1000);
+}
+
+function stopDropMonitor() {
+  if (dropTimer) clearInterval(dropTimer);
+  dropTimer = null;
+}
+
 async function startRecording(config) {
   if (session) return { ok: false, reason: "busy" };
   if (!config || !config.kind) return { ok: false, reason: "no-source" };
@@ -3456,7 +3729,13 @@ async function startRecording(config) {
           width: physical.width,
           height: physical.height,
           workingDir,
-          onStderr: (text) => console.log("[capture:ffmpeg]", text.trim()),
+          onStderr: (text) => {
+            console.log("[capture:ffmpeg]", text.trim());
+            /* Progress lines carry the encoded frame count — the drop
+               monitor's second input (see noteFfmpegFrames). */
+            const match = /frame=\s*(\d+)/.exec(text);
+            if (match) noteFfmpegFrames(Number(match[1]));
+          },
         });
         session.screenCapture = handle;
         screenMode = "ffmpeg";
@@ -3472,6 +3751,8 @@ async function startRecording(config) {
     type: "start",
     config: { ...config, workingDir, screenMode },
   });
+
+  startDropMonitor();
 
   send("recorder", "recorder:state", sessionState());
 
@@ -3496,6 +3777,48 @@ async function startRecording(config) {
     return { ok: false, reason };
   }
 
+  /* Recovery journal — the package only exists once the take stops, so the
+     manifest has to live in the working directory (see recovery.js). The
+     pointer journal is rebased onto the media's own time origin right here,
+     where the ffmpeg first-frame clock is known. */
+  const journalRect = !isDevice
+    ? physicalRectForDisplay(config.displayId || String(screen.getPrimaryDisplay().id))
+    : null;
+  const firstFrameTime = session?.screenCapture?.firstFrameTime;
+  session.pointerJournal = !isDevice
+    ? {
+        rect: journalRect,
+        delta:
+          Number.isFinite(firstFrameTime) && Number.isFinite(pointer.originMs)
+            ? pointer.originMs / 1000 - firstFrameTime
+            : 0,
+        sampleIndex: 0,
+        clickIndex: 0,
+      }
+    : null;
+  session.recoveryTimer = setInterval(() => void flushRecovery(), 5000);
+  session.pointerTimer = setInterval(flushPointerJournal, 2000);
+  void flushRecovery();
+
+  /* Floating camera preview — the original's CameraPreviewWindow. Window
+     recordings only: macOS keeps the original's preview out of the picture
+     with `sharingType = .readOnly`, and a per-window capture excludes other
+     windows the same way. A full-display capture (ddagrab) records everything
+     on screen including the app's own windows, so there the preview would burn
+     itself into the video — the original's preview never does, so the port
+     keeps it hidden instead of reproducing that flaw. */
+  if (
+    !isDevice &&
+    config.kind === "window" &&
+    config.camera?.deviceId &&
+    prefs.get("showFloatingCameraPreview") !== false
+  ) {
+    windows.createFloatingCamera({
+      deviceId: config.camera.deviceId,
+      mirrored: prefs.get("mirrorCamera") !== false,
+    });
+  }
+
   return { ok: true, sizes: { ...(session?.sizes || {}) } };
 }
 
@@ -3509,6 +3832,7 @@ function pauseRecording() {
   }
   send("captureSurface", "capture:command", { type: "pause" });
   send("recorder", "recorder:state", sessionState());
+  void flushRecovery();
   return { ok: true };
 }
 
@@ -3525,6 +3849,7 @@ function resumeRecording() {
   }
   send("captureSurface", "capture:command", { type: "resume" });
   send("recorder", "recorder:state", sessionState());
+  void flushRecovery();
   return { ok: true };
 }
 
@@ -3561,6 +3886,9 @@ function addMarker() {
 async function stopRecording(cancel) {
   if (!session || session.finishing) return { ok: false, reason: "no-session" };
   session.finishing = true;
+  stopRecoveryTimers();
+  windows.closeFloatingCamera();
+  stopDropMonitor();
 
   const workingDir = session.workingDir;
   const ffmpegCapture = session.screenCapture || null;
@@ -3621,12 +3949,32 @@ async function stopRecording(cancel) {
 
   const record = await buildProjectFromSession(merged, pointerTrack, markers, config);
 
+  /* The take reached a package: the journal is no longer needed, and leaving
+     it behind would make the next launch try to salvage this session again. */
+  await recovery.clear(workingDir);
+
+  /* "视频成片": besides the (editable) project package, the recording is also
+     muxed straight into the chosen folder as a plain MP4 — screen picture plus
+     the mixed audio, no editing applied, which is what the destination
+     selector has always promised. A failure here is reported but never costs
+     the user the project. */
+  let moviePath = null;
+  if (config.destination === "movie") {
+    try {
+      moviePath = await deliverMovie(record, workingDir);
+    } catch (error) {
+      console.error("[capture] movie delivery failed", error);
+      send("recorder", "recorder:warning", { message: "movie-delivery-failed" });
+    }
+  }
+
   windows.createCompletion({
     packagePath: record.packagePath,
     name: record.name,
     duration: record.document.timeline.duration,
     posterUrl: record.posterUrl,
     hasCamera: Boolean(record.document.media.camera),
+    moviePath,
   });
 
   const recorder = windows.get("recorder");
@@ -3674,7 +4022,7 @@ async function buildProjectFromSession(captured, pointerTrack, markers, config) 
   if (captured.screenMedia) {
     /* ffmpeg 采集的屏幕素材已经是规范的 H.264 MP4，直接采用。 */
     const relative = await projectIO.adoptMedia(packagePath, captured.screenMedia.file, "screen");
-    const absolute = path.join(packagePath, relative);
+    const absolute = projectIO.withLongPath(path.join(packagePath, relative));
     media.screen = {
       path: relative,
       duration: captured.screenMedia.duration || 0,
@@ -3692,7 +4040,7 @@ async function buildProjectFromSession(captured, pointerTrack, markers, config) 
     const file = captured.files[role];
     if (!file || !fs.existsSync(file)) continue;
     const relative = await projectIO.adoptMedia(packagePath, file, role);
-    const absolute = path.join(packagePath, relative);
+    const absolute = projectIO.withLongPath(path.join(packagePath, relative));
     /* MediaRecorder output has no duration in its header; remux it so the
        recorded material is a well-formed file. */
     await exporter.finalizeRecording(absolute).catch(() => {});
@@ -3728,6 +4076,15 @@ async function buildProjectFromSession(captured, pointerTrack, markers, config) 
     }
   }
 
+  /* The pointer track lives in `events/pointer.jsonl` — the durable journal
+     format the original keeps — and the document only carries the reference,
+     so autosaves never re-serialise tens of thousands of samples. */
+  const pointerRelative = await projectIO.writePointerJournal(
+    packagePath,
+    pointerSamples,
+    pointerClicks
+  );
+
   let posterUrl = null;
   if (captured.posterPath && fs.existsSync(captured.posterPath)) {
     const relative = await projectIO.adoptMediaAs(
@@ -3757,8 +4114,8 @@ async function buildProjectFromSession(captured, pointerTrack, markers, config) 
     },
     media,
     pointerTrack: {
-      samples: pointerSamples,
-      clicks: pointerClicks,
+      path: pointerRelative,
+      count: pointerSamples.length,
     },
     markers,
     timeline: {
@@ -3777,6 +4134,15 @@ async function buildProjectFromSession(captured, pointerTrack, markers, config) 
   };
 
   await projectIO.writeProjectJson(packagePath, document);
+
+  /* The recorder bar's camera menu chooses whether the camera picture starts
+     mirrored; the editor's own toggle still wins from there on. Only the
+     non-default direction is seeded, so documents stay byte-identical to the
+     original's shape unless the user opted out. */
+  if (config?.camera && config.camera.mirrored === false && media.camera) {
+    document = { ...document, camera: { ...(document.camera || {}), isMirrored: false } };
+    await projectIO.writeProjectJson(packagePath, document);
+  }
 
   /* A preset marked as the new-recording default is baked into the document
      here, before the editor ever opens it — the editor then normalises the
@@ -3797,12 +4163,198 @@ async function buildProjectFromSession(captured, pointerTrack, markers, config) 
   return { packagePath, name: document.name, document, posterUrl };
 }
 
+/**
+ * Rebuilds projects from takes that were interrupted by a crash or a forced
+ * quit — the port's answer to the original's launch-time recovery pass. Runs
+ * after the first window is up; each salvage is best-effort and a failure
+ * leaves the session in place for the next launch.
+ */
+async function recoverInterruptedSessions() {
+  if (session) return; // a fresh take is already running (smoke tests)
+  let recoverable = [];
+  try {
+    recoverable = await recovery.listRecoverable(tempDir());
+  } catch {
+    return;
+  }
+  if (!recoverable.length) return;
+  console.log(`[recovery] ${recoverable.length} interrupted recording(s) found`);
+  for (const { workingDir, manifest } of recoverable.slice(0, 3)) {
+    try {
+      const record = await salvageSession(workingDir, manifest);
+      if (!record) {
+        console.warn("[recovery] nothing salvageable in", workingDir);
+        continue;
+      }
+      await recovery.clear(workingDir);
+      await fsp.rm(workingDir, { recursive: true, force: true }).catch(() => {});
+      windows.createCompletion({
+        packagePath: record.packagePath,
+        name: record.name,
+        duration: record.document.timeline.duration,
+        posterUrl: record.posterUrl,
+        hasCamera: Boolean(record.document.media.camera),
+        moviePath: null,
+        recovered: true,
+      });
+      console.log("[recovery] salvaged", record.packagePath);
+    } catch (error) {
+      console.error("[recovery] salvage failed:", workingDir, error?.message || error);
+    }
+  }
+}
+
+/**
+ * Turns an interrupted take's working directory into a project package:
+ * remux leftover screen segments, adopt whatever audio/camera files survived,
+ * and rebuild the document from the manifest. Pointer samples come from the
+ * journal, already in the media time base, so no rebase is applied here
+ * (`originMs: null` keeps buildProjectFromSession from shifting them again).
+ * Audio tracks recorded alongside an ffmpeg screen capture lose their
+ * start-offset alignment in a recovered take — the offset is only known by
+ * the live session — so they start at the media origin.
+ */
+async function salvageSession(workingDir, manifest) {
+  const config = manifest.config || {};
+  const fps = config.fps || 60;
+  const existing = (name) => {
+    try {
+      const file = path.join(workingDir, name);
+      return fs.existsSync(file) && fs.statSync(file).size > 1024 ? file : null;
+    } catch {
+      return null;
+    }
+  };
+
+  let screenMedia = null;
+  const finishedScreen = existing("screen.mp4");
+  if (finishedScreen) {
+    const info = await screenCapture.probeVideo(finishedScreen).catch(() => null);
+    if (info?.duration) {
+      screenMedia = {
+        file: finishedScreen,
+        duration: info.duration,
+        width: info.width,
+        height: info.height,
+        firstFrameTime: null,
+      };
+    }
+  }
+  if (!screenMedia) {
+    /* Raw H.264 segments left behind by a crashed ffmpeg capture. */
+    screenMedia = await screenCapture.salvage(workingDir, fps).catch((error) => {
+      console.warn("[recovery] segment salvage failed:", error?.message || error);
+      return null;
+    });
+  }
+
+  const files = {};
+  if (!screenMedia) {
+    /* Chromium capture path: an unfinished WebM is still remuxable. */
+    const webm = existing("screen.webm");
+    if (webm) files.screen = webm;
+  }
+  for (const role of ["camera", "system", "microphone"]) {
+    const file = existing(`${role}.webm`);
+    if (file) files[role] = file;
+  }
+  if (!screenMedia && !files.screen) return null;
+
+  const pointerTrack = await recovery.readPointerLines(workingDir);
+  const duration = screenMedia?.duration || 0;
+  const markers = (manifest.markers || []).map((marker) => ({
+    ...marker,
+    time: duration
+      ? Math.max(0, Math.min(Number(marker.time) || 0, duration))
+      : Number(marker.time) || 0,
+  }));
+
+  let posterPath = existing("poster.png");
+  if (!posterPath && screenMedia) {
+    posterPath = path.join(workingDir, "poster.png");
+    await exporter
+      .runFfmpeg(["-loglevel", "error", "-i", screenMedia.file, "-vf", "scale=640:-2", "-frames:v", "1", "-y", posterPath])
+      .catch(() => {});
+    if (!fs.existsSync(posterPath)) posterPath = null;
+  }
+
+  const captured = {
+    suggestedName: `恢复的录制 ${timestampName()}`,
+    screenMedia,
+    files,
+    durations: {},
+    sizes: {},
+    trackStartedAt: {},
+    posterPath: posterPath || undefined,
+    duration: duration || Math.max(1, Number(manifest.elapsed) || 1),
+    screenMode: screenMedia ? "ffmpeg" : "legacy",
+  };
+
+  return buildProjectFromSession(
+    captured,
+    { samples: pointerTrack.samples, clicks: pointerTrack.clicks, originMs: null },
+    markers,
+    config
+  );
+}
+
+/**
+ * Delivers a finished recording as a plain MP4 — the "视频成片" destination.
+ *
+ * The project package is still built (it is the editable source the completion
+ * card offers), but the user asked for a movie, so the screen recording and the
+ * mixed audio are also muxed straight into the chosen folder with no editing
+ * applied: screen picture as recorded, system and microphone audio mixed at the
+ * document's defaults. Reuses the export pipeline's ffmpeg passes, so the
+ * result is bit-identical to what "导出成片" would produce for an unedited
+ * project.
+ *
+ * @returns {Promise<string|null>} the delivered file, or null when there is no
+ *   chosen folder or no screen media (the caller keeps the project either way).
+ */
+async function deliverMovie(record, workingDir) {
+  const folder = prefs.get("projectLocation");
+  if (!folder) return null;
+
+  const screen = record.document.media?.screen;
+  if (!screen?.path) return null;
+
+  await ensureDir(folder);
+  const screenAbs = path.join(record.packagePath, screen.path);
+
+  const tracks = {};
+  for (const role of ["system", "microphone"]) {
+    const entry = record.document.media?.[role];
+    if (entry?.path) tracks[role] = path.join(record.packagePath, entry.path);
+  }
+
+  /* A fresh document's audio graph spans the whole recording, so this mix is
+     the raw material — no trims, no per-clip volumes. */
+  const mixPath = path.join(workingDir, "movie-mix.wav");
+  const audio = await exporter.renderAudio(record.document, tracks, mixPath).catch((error) => {
+    console.warn("[capture] movie audio mix failed; delivering silent video:", error.message);
+    return null;
+  });
+
+  let output = path.join(folder, `${record.name}.mp4`);
+  for (let counter = 2; fs.existsSync(output); counter += 1) {
+    output = path.join(folder, `${record.name}-${counter}.mp4`);
+  }
+
+  await exporter.mux({
+    videoPath: screenAbs,
+    audioPath: audio,
+    outputPath: output,
+    duration: record.document.timeline.duration,
+  });
+  return output;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Export                                                                    */
 /* ------------------------------------------------------------------------- */
 
 const EXPORT_IDLE_MS = 20000;
-
 async function beginExport(payload, sender) {
   if (exportJob) {
     /* A renderer that aborted before `finish` — an encoder error, a closed
@@ -3836,6 +4388,10 @@ async function beginExport(payload, sender) {
     lastActivity: Date.now(),
     outputPath: payload.outputPath,
     codec: payload.codec,
+    /* Final codec choice: "h264" (default), "hevc" or "prores". The renderer
+       always streams a WebCodecs bitstream (H.264, or HEVC when its hardware
+       encoder is available); the target only decides how wrapVideo finishes. */
+    encoder: ["hevc", "prores"].includes(payload.encoder) ? payload.encoder : "h264",
     fps: payload.fps,
     duration: payload.duration,
     mode: payload.mode || "bitstream",
@@ -3926,7 +4482,7 @@ async function finishExport(payload) {
 
     send("exportPanel", "export:progress", { stage: "encoding", progress: 0 });
 
-    const silentVideo = path.join(job.dir, "video.mp4");
+    const silentVideo = path.join(job.dir, job.encoder === "prores" ? "video.mov" : "video.mp4");
     const onProgress = (progress) =>
       send("exportPanel", "export:progress", { stage: "encoding", progress });
 
@@ -3939,6 +4495,7 @@ async function finishExport(payload) {
         duration: job.duration,
         signal: job.controller.signal,
         onProgress,
+        target: job.encoder,
       });
     } else {
       /* An empty bitstream means the encoder never produced a frame. Handing
@@ -3966,6 +4523,7 @@ async function finishExport(payload) {
         duration: job.duration,
         signal: job.controller.signal,
         onProgress,
+        target: job.encoder,
       });
     }
 

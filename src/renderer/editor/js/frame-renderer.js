@@ -285,7 +285,14 @@ export function layoutCamera(document, time, width, height, screenLayout) {
     y = y + (target.position.y * height - y) * progress;
     baseWidth *= 1 + (target.scale - 1) * progress;
     baseHeight *= 1 + (target.scale - 1) * progress;
-    opacity = 1 + (target.opacity - 1) * progress;
+    /* An entrance clip fades the camera in with its own ramp — the camera is
+       out of frame before it starts (see the upcoming check below). */
+    opacity = motion.entrance ? progress : 1 + (target.opacity - 1) * progress;
+  } else {
+    /* The next camera clip owns the camera's entrance: until it starts the
+       camera stays hidden, which is what makes 出现动画 read as an entrance. */
+    const upcoming = document.timeline.cameraMotionClips.find((clip) => clip.startTime > time);
+    if (upcoming?.entrance) opacity = 0;
   }
 
   const opening = openingProgress(document, time, "摄像头");
@@ -906,9 +913,108 @@ function drawScreenBorder(ctx, rect, document) {
 /* Mockup chrome                                                             */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * Device frames (phone / tablet / adaptive) — the port of the original's
+ * ScreenFrameDefaults device cases. A device frame is a bezel around the
+ * picture rather than a toolbar above it, so it inflates the card on every
+ * side and travels with it under Screen 3D, exactly like the window shells.
+ */
+const DEVICE_FRAMES = {
+  /* 通用平板样机 now draws a real tablet bezel; it used to fall through to a
+     bare shadow. */
+  devicePhone: { bezel: 0.045, radius: 0.07, island: false },
+  phonePortrait: { bezel: 0.03, radius: 0.13, island: true },
+  phoneLandscape: { bezel: 0.03, radius: 0.13, island: true },
+  tabletPortrait: { bezel: 0.045, radius: 0.07, island: false },
+  tabletLandscape: { bezel: 0.045, radius: 0.07, island: false },
+};
+
+/** Resolves a frame style to device parameters, picking by content aspect for 自适应设备框. */
+function deviceFrameFor(style, rect) {
+  if (style === "adaptiveDevice") {
+    const aspect = rect.width / Math.max(rect.height, 0.001);
+    if (aspect < 0.8) return { ...DEVICE_FRAMES.phonePortrait };
+    if (aspect < 1.3) return { ...DEVICE_FRAMES.tabletPortrait };
+    return { ...DEVICE_FRAMES.tabletLandscape };
+  }
+  return DEVICE_FRAMES[style] || null;
+}
+
+function drawDeviceBezel(ctx, document, rect, device) {
+  const minSide = Math.min(rect.width, rect.height);
+  const bezel = Math.max(3, minSide * device.bezel);
+  const outer = {
+    x: rect.x - bezel,
+    y: rect.y - bezel,
+    width: rect.width + bezel * 2,
+    height: rect.height + bezel * 2,
+  };
+  const outerRadius = Math.min(outer.width, outer.height) * device.radius;
+
+  const projection = hasScreen3D(rect)
+    ? {
+        rotationX: rect.tiltX,
+        rotationY: rect.tiltY,
+        rotationZ: rect.rotation,
+        perspective: rect.perspective,
+        anchor: { x: rect.centerX, y: rect.centerY },
+      }
+    : null;
+  const outerQuad = projection ? projectedScreenQuad(outer, projection) : null;
+  const shape = { width: outer.width, height: outer.height };
+  const trace = () => {
+    if (outerQuad) traceProjectedPath(ctx, outerQuad, shape, outerRadius);
+    else roundRect(ctx, outer.x, outer.y, outer.width, outer.height, outerRadius);
+  };
+
+  /* Bezel body, with the same drop shadow the window shells get. */
+  ctx.save();
+  ctx.shadowColor = `rgba(0,0,0,${0.34 * (document.canvas.shadowStrength || 0.28) + 0.08})`;
+  ctx.shadowBlur = Math.max(10, rect.width * 0.05);
+  ctx.shadowOffsetY = Math.max(3, rect.height * 0.018);
+  ctx.fillStyle = "#191a1c";
+  trace();
+  ctx.fill();
+  ctx.restore();
+
+  /* A lighter rim reads as machined metal rather than flat plastic. */
+  ctx.save();
+  trace();
+  ctx.clip();
+  ctx.strokeStyle = "rgba(255,255,255,0.16)";
+  ctx.lineWidth = Math.max(1, bezel * 0.1);
+  ctx.strokeRect(outer.x, outer.y, outer.width, outer.height);
+  ctx.restore();
+
+  /* Phone camera pill, kept inside the top bezel so the picture (painted
+     after the chrome) never covers it. */
+  if (device.island) {
+    const pillWidth = rect.width * 0.24;
+    const pillHeight = Math.min(rect.height * 0.02, bezel * 0.7);
+    ctx.save();
+    ctx.fillStyle = "#050607";
+    roundRect(
+      ctx,
+      rect.x + rect.width / 2 - pillWidth / 2,
+      rect.y - bezel + (bezel - pillHeight) / 2,
+      pillWidth,
+      Math.max(3, pillHeight),
+      Math.max(1.5, pillHeight / 2)
+    );
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
 function drawMockup(ctx, document, rect, time) {
   const style = document.canvas.screenFrame;
   if (!style || style === "none") return null;
+
+  const device = deviceFrameFor(style, rect);
+  if (device) {
+    drawDeviceBezel(ctx, document, rect, device);
+    return { toolbarHeight: 0, outerRadius: 0 };
+  }
 
   const scale = document.canvas.screenFrameScale || 1;
   const toolbarScale = document.canvas.screenFrameToolbarScale || 1;
@@ -1155,12 +1261,15 @@ function drawStickers(ctx, document, time, width, height, sources) {
     let animation = { scale: 1, opacity: 1, offsetX: 0, offsetY: 0 };
 
     if (clip.animationIn !== "无动画" && local < inDuration) {
-      animation = animationState(clip.animationIn, local / Math.max(inDuration, 0.001), true);
+      animation = animationState(clip.animationIn, local / Math.max(inDuration, 0.001), true, {
+        curve: clip.animationCurve,
+      });
     } else if (clip.animationOut !== "无动画" && local > clip.duration - outDuration) {
       animation = animationState(
         clip.animationOut,
         (clip.duration - local) / Math.max(outDuration, 0.001),
-        false
+        false,
+        { curve: clip.animationCurve, enterKind: clip.animationIn }
       );
     }
 
@@ -1199,11 +1308,26 @@ function drawStickers(ctx, document, time, width, height, sources) {
   }
 }
 
-function animationState(kind, progress, entering) {
+/**
+ * Evaluates one sticker transition.
+ *
+ * `progress` counts DOWN during an exit (1 = still in place, 0 = gone), so the
+ * same state functions serve both directions. `options.curve` picks the ramp
+ * pace (the original's 动效节奏); `options.enterKind` lets "反向" mirror the
+ * clip's own enter animation.
+ */
+function animationState(kind, progress, entering, options = {}) {
   const p = Math.max(0, Math.min(1, progress));
-  const eased = 1 - Math.pow(1 - p, 3);
+  const curve = options.curve || "swift";
+  const eased =
+    curve === "crisp"
+      ? easeProgress("crisp", p)
+      : curve === "gentle"
+        ? easeProgress("gentle", p)
+        : 1 - Math.pow(1 - p, 3);
   const base = { scale: 1, opacity: 1, offsetX: 0, offsetY: 0 };
   const distance = 0.16;
+  const diagonal = distance * Math.SQRT1_2;
   switch (kind) {
     case "淡入":
     case "淡出":
@@ -1212,22 +1336,34 @@ function animationState(kind, progress, entering) {
       return { ...base, scale: 0.6 + 0.4 * eased, opacity: eased };
     case "收缩":
       return { ...base, scale: 1.4 - 0.4 * eased, opacity: eased };
+    case "反向":
+      /* The exit mirrors the clip's own enter animation. */
+      return animationState(
+        options.enterKind && options.enterKind !== "无动画" ? options.enterKind : "淡出",
+        p,
+        true,
+        { curve }
+      );
     case "从左":
-      return { ...base, offsetX: -(1 - eased) * distance, opacity: eased };
-    case "从右":
-      return { ...base, offsetX: (1 - eased) * distance, opacity: eased };
-    case "从上":
-      return { ...base, offsetY: -(1 - eased) * distance, opacity: eased };
-    case "从下":
-      return { ...base, offsetY: (1 - eased) * distance, opacity: eased };
     case "向左":
       return { ...base, offsetX: -(1 - eased) * distance, opacity: eased };
+    case "从右":
     case "向右":
       return { ...base, offsetX: (1 - eased) * distance, opacity: eased };
+    case "从上":
     case "向上":
       return { ...base, offsetY: -(1 - eased) * distance, opacity: eased };
+    case "从下":
     case "向下":
       return { ...base, offsetY: (1 - eased) * distance, opacity: eased };
+    case "左上":
+      return { ...base, offsetX: -(1 - eased) * diagonal, offsetY: -(1 - eased) * diagonal, opacity: eased };
+    case "右上":
+      return { ...base, offsetX: (1 - eased) * diagonal, offsetY: -(1 - eased) * diagonal, opacity: eased };
+    case "左下":
+      return { ...base, offsetX: -(1 - eased) * diagonal, offsetY: (1 - eased) * diagonal, opacity: eased };
+    case "右下":
+      return { ...base, offsetX: (1 - eased) * diagonal, offsetY: (1 - eased) * diagonal, opacity: eased };
     default:
       return base;
   }

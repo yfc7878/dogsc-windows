@@ -7,9 +7,11 @@
  * rejected write, and edits landing mid-save keep the draft dirty.
  */
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const ROOT = "D:/CXY/Documents/work/2026-10-10-17-25-20/DogSC-Windows";
+/* Derived from this file's location so the suite runs from any checkout path
+   (the old absolute path broke `npm test` on every other machine). */
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 let saveImpl = async () => {};
 const probeDoc = {
@@ -22,7 +24,7 @@ const probeDoc = {
 globalThis.window = {
   dogsc: {
     project: {
-      open: async () => ({ document: JSON.parse(JSON.stringify(probeDoc)) }),
+      open: async () => ({ ok: true, document: JSON.parse(JSON.stringify(probeDoc)) }),
       save: (payload) => saveImpl(payload),
     },
   },
@@ -40,7 +42,7 @@ const reasons = [];
 store.subscribe((_store, reason) => reasons.push(reason));
 
 /* ---- load: a freshly opened project is clean ---- */
-await store.load("D:/probe.dogscproject");
+await store.load(path.join(ROOT, "probe.dogscproject"));
 check("load → clean", store.saveStatus === "clean" && store.revision === 0, `status=${store.saveStatus}`);
 
 /* ---- every edit path marks the draft ---- */

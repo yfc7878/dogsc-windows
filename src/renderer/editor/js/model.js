@@ -23,6 +23,11 @@ export const SCREEN_FRAMES = [
   { value: "browserLight", label: "浏览器·浅色", icon: "window" },
   { value: "browserDark", label: "浏览器·深色", icon: "window" },
   { value: "devicePhone", label: "通用平板样机", icon: "device" },
+  { value: "adaptiveDevice", label: "自适应设备框", icon: "device" },
+  { value: "phonePortrait", label: "手机·竖屏", icon: "device" },
+  { value: "phoneLandscape", label: "手机·横屏", icon: "device" },
+  { value: "tabletPortrait", label: "平板·竖屏", icon: "device" },
+  { value: "tabletLandscape", label: "平板·横屏", icon: "device" },
 ];
 
 export const BACKGROUND_PATTERNS = [
@@ -136,6 +141,10 @@ export function defaultCamera() {
     scaleDuringZoom: 0.7,
     contentPosition: { x: 0.5, y: 0.5 },
     contentScale: 1,
+    /* Whole-track A/V sync, seconds. Positive delays the picture against the
+       camera (the camera frame is sampled earlier) — same convention as
+       cursorStyle.syncOffset. */
+    syncOffset: 0,
   };
 }
 
@@ -181,8 +190,33 @@ export const CLICK_EFFECT_DURATION = {
   none: 0,
 };
 
-export const STICKER_ANIMATIONS_IN = ["无动画", "淡入", "弹出", "从左", "从右", "从上", "从下"];
-export const STICKER_ANIMATIONS_OUT = ["无动画", "淡出", "收缩", "向左", "向右", "向上", "向下"];
+export const STICKER_ANIMATIONS_IN = [
+  "无动画",
+  "淡入",
+  "弹出",
+  "从左",
+  "从右",
+  "从上",
+  "从下",
+  "左上",
+  "右上",
+  "左下",
+  "右下",
+];
+export const STICKER_ANIMATIONS_OUT = [
+  "无动画",
+  "淡出",
+  "收缩",
+  "反向",
+  "向左",
+  "向右",
+  "向上",
+  "向下",
+  "左上",
+  "右上",
+  "左下",
+  "右下",
+];
 
 export const SPEED_PRESETS = [0.5, 1, 1.5, 2];
 
@@ -268,6 +302,10 @@ export function normalizeDocument(raw) {
     cursorStyle,
     opening,
     pointerTrack: {
+      /* `path` references `events/pointer.jsonl` in the package; samples and
+         clicks are hydrated from it on load and stripped again on save. */
+      path: typeof doc.pointerTrack?.path === "string" ? doc.pointerTrack.path : null,
+      count: Number.isFinite(doc.pointerTrack?.count) ? doc.pointerTrack.count : null,
       samples: Array.isArray(doc.pointerTrack?.samples) ? doc.pointerTrack.samples : [],
       clicks: Array.isArray(doc.pointerTrack?.clicks) ? doc.pointerTrack.clicks : [],
     },
@@ -333,6 +371,8 @@ function normalizeTimeline(raw, media) {
     animationOut: clip.animationOut || "无动画",
     animationInDuration: num(clip.animationInDuration, 0.4),
     animationOutDuration: num(clip.animationOutDuration, 0.4),
+    /* Pace of the enter/exit ramp — the original's 动效节奏. */
+    animationCurve: clip.animationCurve || "swift",
   }));
 
   const mosaicClips = (raw?.mosaicClips || []).map((clip) => ({
@@ -368,6 +408,10 @@ function normalizeMotionClips(list) {
     transitionIn: clamp(num(clip.transitionIn, 0.7), 0, 3),
     transitionOut: clamp(num(clip.transitionOut, 0.7), 0, 3),
     easing: clip.easing || "spring",
+    /* Camera entrance clips (the original's 出现动画): the camera stays out of
+       frame until the clip starts and fades in with its own ramp. Optional so
+       existing projects keep their verified behaviour. */
+    entrance: Boolean(clip.entrance),
     target: {
       position: { x: num(clip.target?.position?.x, 0.5), y: num(clip.target?.position?.y, 0.5) },
       scale: clamp(num(clip.target?.scale, 1), 0.1, 4),
@@ -478,12 +522,22 @@ export function rid() {
 export function easeProgress(kind, t) {
   const x = clamp(t, 0, 1);
   switch (kind) {
+    case "linear":
+      return x;
+    case "quad":
+      return x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
+    case "cubic":
+    case "easeInOut":
+      /* `easeInOut` is the legacy value earlier builds wrote for 均衡; it now
+         maps to the cubic curve it was always meant to be (it used to fall
+         through to the spring default). */
+      return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+    case "quint":
+      return x < 0.5 ? 16 * x * x * x * x * x : 1 - Math.pow(-2 * x + 2, 5) / 2;
     case "crisp":
       return 1 - Math.pow(1 - x, 4);
     case "gentle":
       return x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
-    case "linear":
-      return x;
     case "spring":
     default:
       /* Critically-damped spring response used by the original's transitions. */

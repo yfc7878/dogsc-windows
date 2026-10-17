@@ -29,7 +29,10 @@ async function boot() {
     toast(t("已保存"), { icon: "save" });
     window.close();
   });
-  document.getElementById("btn-discard").addEventListener("click", discard);
+  document.getElementById("btn-discard").addEventListener("click", () => discard());
+  document.getElementById("btn-reveal-movie").addEventListener("click", () => {
+    if (payload?.moviePath) api.exporter.reveal(payload.moviePath);
+  });
 
   api.on("completion:init", (data) => {
     payload = data;
@@ -58,6 +61,28 @@ function render() {
     empty.hidden = false;
   }
   document.getElementById("preview-meta").textContent = formatDuration(payload.duration || 0);
+
+  /* "视频成片": the MP4 was already delivered while the project package was
+     being assembled — surface where it landed and keep the project actions. */
+  const note = document.getElementById("movie-note");
+  if (payload.moviePath) {
+    document.getElementById("movie-path").textContent = payload.moviePath;
+    note.hidden = false;
+    document.getElementById("sheet-hint").textContent = t(
+      "成片已保存为 MP4；项目包同时保留，可随时回来继续编辑，或将这次录制移到回收站。"
+    );
+  } else {
+    note.hidden = true;
+  }
+
+  /* A take interrupted by a crash or a forced quit, rebuilt on this launch.
+     Same three routes, different wording so the user knows what happened. */
+  if (payload.recovered) {
+    document.querySelector(".sheet-title").textContent = t("已恢复中断的录制");
+    document.getElementById("sheet-hint").textContent = t(
+      "上次录制意外中断，已保留可用部分。可以继续编辑，或将这次录制移到回收站。"
+    );
+  }
 }
 
 function openEditor() {
