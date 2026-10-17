@@ -19,3 +19,11 @@
   1. **本地工作区有未提交改动**：19 个已修改文件（`src/main/*`、`src/renderer/editor/js/*`、`completion/*`、`recorder/`、`export/`、`i18n.js` 等）与 2 个未跟踪目录/文件（`src/renderer/floating-camera/`、`src/renderer/shared/sound.js`），属于光标系统之后的在研改动。按约定「工作区干净才同步」，本次未提交、未推送，等用户确认这批改动可以落库。
   2. **本地与远程历史互不相关**：本地 `main` 为 33 个提交（含 `feat: 光标形状系统…` 等），远程 `main` 是快照式提交（`docs: README 增加 Releases 下载入口` 等），两者没有共同祖先 —— `git push` 会被拒、只能强推（属破坏性操作，已跳过）。需要用户决定：以本地完整历史为准重建远程，还是继续按需用 API 追加提交。
   3. 直连 github.com 不稳定，后续每日任务默认走 api.github.com；本地 `git fetch` 需在网络恢复后再验证一次。
+
+## 2026-10-17（补充 · 12:45 手动处理）
+
+- 用户确认工作区的 31 文件在研改动（另一并行开发会话产出）合理，随 `npm test`（97 项全部通过）一起提交：
+  - `13a86d4` docs: README 顶部添加 GitHub 数据徽章（Star / Fork / Release / 下载，shields.io social 按钮样式）
+  - `350603b` feat: 悬浮摄像头预览、成片交付与编辑器增强（并行开发批次落库）
+- **待办 2 已解决**：以本地完整历史为准强推重建远程 main（带 token 的 `git push --force`，`837b097...350603b forced update`）。推送前已核对远程树相对本地无独有文件，快照链没有丢失内容。**此后本地与远程同源**，`git push` / `git fetch` 恢复正常流程；若直连 github.com 仍不稳，走 api.github.com Git Data 时务必以远程 HEAD 为父提交，避免历史再次分叉。
+- 待办 1（工作区未提交改动）已随本次落库清零。
