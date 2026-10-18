@@ -27,3 +27,17 @@
   - `350603b` feat: 悬浮摄像头预览、成片交付与编辑器增强（并行开发批次落库）
 - **待办 2 已解决**：以本地完整历史为准强推重建远程 main（带 token 的 `git push --force`，`837b097...350603b forced update`）。推送前已核对远程树相对本地无独有文件，快照链没有丢失内容。**此后本地与远程同源**，`git push` / `git fetch` 恢复正常流程；若直连 github.com 仍不稳，走 api.github.com Git Data 时务必以远程 HEAD 为父提交，避免历史再次分叉。
 - 待办 1（工作区未提交改动）已随本次落库清零。
+
+## 2026-10-18
+
+- 检查：
+  - issues：`state=all` 共 0 条 —— 无新 issue、无新评论，无需回复。
+  - PR：open 状态 0 条。
+  - 通知：GitHub 账号通知 0 条。
+  - 数据：stars 1 / forks 0 / watchers 0 / open issues 0；pushed_at 2026-10-17 05:42 UTC（与昨日相比仅多出 v0.2.0 发布与 README 更新两次提交）。
+  - Release：新增 **v0.2.0**（开发版，2026-10-17 05:40 UTC 发布）—— `DogSC-0.2.0-win-x64-portable.exe` 0 次、`DogSC-0.2.0-win-x64-setup.exe` 0 次（发布不足一天，尚无下载）；v0.1.2 保持 `portable 2 / setup 1`，与昨日一致（**累计下载 3 次，较昨日 +0**）。
+- 动作：
+  - 无反馈需要回复，无代码改动。
+  - 例行校验：README 下载表的文件名已与 v0.2.0 实际资产一致（`DogSC-0.2.0-win-x64-setup.exe` / `-portable.exe`），`package.json` 版本同为 `0.2.0`，顶部的 Star / Fork / Release / 下载 四枚徽章链接有效 —— 无需修正。
+  - 追加本日报告并提交推送。
+- 待办：暂无阻塞事项。v0.2.0 为昨夜发布的新版本，后续留意首批用户反馈（尤其导出 / 录制 / 光标模块）；本地与远程已同源，工作区干净。
