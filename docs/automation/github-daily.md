@@ -41,3 +41,18 @@
   - 例行校验：README 下载表的文件名已与 v0.2.0 实际资产一致（`DogSC-0.2.0-win-x64-setup.exe` / `-portable.exe`），`package.json` 版本同为 `0.2.0`，顶部的 Star / Fork / Release / 下载 四枚徽章链接有效 —— 无需修正。
   - 追加本日报告并提交推送。
 - 待办：暂无阻塞事项。v0.2.0 为昨夜发布的新版本，后续留意首批用户反馈（尤其导出 / 录制 / 光标模块）；本地与远程已同源，工作区干净。
+
+## 2026-10-19
+
+- 检查：
+  - issues：`state=all` 共 0 条 —— 无新 issue、无新评论，无需回复。
+  - PR：open 状态 0 条。
+  - 通知：GitHub 账号通知 0 条。
+  - 数据：stars 1 / forks 0 / watchers 0 / open issues 0（与昨日持平）；`pushed_at` 2026-10-18 02:10 UTC，即昨日日报提交，此后仓库无新提交。
+  - Release：v0.2.0 `portable` 0 次 / `setup` 0 次；v0.1.2 保持 `portable 2` / `setup 1` —— **累计下载 3 次，较昨日 +0**。发布三日仍无下载，可留意分发渠道曝光。
+- 动作：
+  - 无反馈需要回复，无代码改动。
+  - 例行校验：`package.json` 版本 `0.2.0` 与 README 下载表两道文件名（`DogSC-0.2.0-win-x64-setup.exe` / `-portable.exe`）及 v0.2.0 实际资产一致；顶部 Star / Fork / Release / 下载四枚徽章链接指向有效路径 —— 无需修正。
+  - 回归：`npm test` 退出码 0，102 条断言全 PASS（auto-zoom / pointer-smooth / save-state / media-exchange / cursor-shapes / project-io / recovery 七个探针，7 组 ALL PASS）。
+  - 追加本日报告并提交推送。
+- 待办：暂无阻塞事项。连续三日零 issue / 零 PR，v0.2.0 尚无下载 —— 若后续需要真实反馈，可考虑在 README 或社群主动邀请试用；工作区干净，本地与远程同源。
